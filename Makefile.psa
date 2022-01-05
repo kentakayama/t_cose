@@ -44,7 +44,7 @@ QCBOR_LIB=-lqcbor
 CRYPTO_LIB=-l mbedcrypto
 CRYPTO_INC=-I /usr/local/include
 
-CRYPTO_CONFIG_OPTS=-DT_COSE_USE_PSA_CRYPTO
+CRYPTO_CONFIG_OPTS=-DT_COSE_USE_PSA_CRYPTO -DT_COSE_USE_PSA_CRYPTO_FROM_MBED_CRYPTO31
 CRYPTO_OBJ=crypto_adapters/t_cose_psa_crypto.o 
 CRYPTO_TEST_OBJ=test/t_cose_make_psa_test_key.o
 

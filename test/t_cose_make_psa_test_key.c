@@ -210,8 +210,9 @@ void free_ecdsa_key_pair(struct t_cose_key key_pair)
  */
 int check_for_key_pair_leaks()
 {
-#if defined(T_COSE_USE_PSA_CRYPTO_FROM_MBED_CRYPTO11)
-    /* No way to check for leaks with MBED Crypto 1.1 */
+#if defined(T_COSE_USE_PSA_CRYPTO_FROM_MBED_CRYPTO11) || \
+    defined(T_COSE_USE_PSA_CRYPTO_FROM_MBED_CRYPTO31)
+    /* No way to check for leaks with MBED Crypto 1.1 and above 3.1 */
     return 0;
 
 #else
