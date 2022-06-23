@@ -90,6 +90,19 @@ extern "C" {
  */
 #define T_COSE_ALGORITHM_ES512 -36
 
+/**
+ * \def T_COSE_ALGORITHM_EDDSA -8
+ *
+ * \brief Indicated EdDSA.
+ *
+ * This value comes from the
+ * [IANA COSE Registry](https://www.iana.org/assignments/cose/cose.xhtml).
+ *
+ * The COSE standard recommends a key using the Ed25519 curve or
+ * Ed448 curve with this algorithm.
+ */
+#define T_COSE_ALGORITHM_EDDSA -8
+
 
 
 

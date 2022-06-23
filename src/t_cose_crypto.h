@@ -103,6 +103,8 @@ extern "C" {
 #define T_COSE_EC_P256_SIG_SIZE 64  /* size for secp256r1 */
 #define T_COSE_EC_P384_SIG_SIZE 96  /* size for secp384r1 */
 #define T_COSE_EC_P512_SIG_SIZE 132 /* size for secp521r1 */
+#define T_COSE_EC_ED25519_SIG_SIZE 64 /* size for Ed25519 */
+#define T_COSE_EC_ED448_SIG_SIZE 114 /* size for Ed448 */
 
 
 /**
@@ -283,6 +285,7 @@ t_cose_crypto_verify(int32_t               cose_algorithm_id,
 #include "psa/crypto.h"
 
 #elif T_COSE_USE_OPENSSL_CRYPTO
+#include "openssl/ec.h"
 #include "openssl/evp.h"
 
 #elif T_COSE_USE_B_CON_SHA256

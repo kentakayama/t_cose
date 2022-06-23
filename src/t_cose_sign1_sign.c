@@ -43,15 +43,58 @@
 #error COSE algorithm identifier definitions are in error
 #endif
 
+#if T_COSE_ALGORITHM_EDDSA != COSE_ALGORITHM_EDDSA
+#error COSE algorithm identifier definitions are in error
+#endif
+
 
 #ifndef T_COSE_DISABLE_SHORT_CIRCUIT_SIGN
+static inline size_t eddsa_sig_size(struct t_cose_key cose_key)
+{
+    switch (cose_key.crypto_lib) {
+    case T_COSE_CRYPTO_LIB_OPENSSL:
+        #ifdef T_COSE_USE_OPENSSL_CRYPTO
+        {
+            const EC_GROUP *group = EC_KEY_get0_group(cose_key.k.key_ptr);
+            switch (EC_GROUP_get_curve_name(group)) {
+            case NID_ED25519:
+                return T_COSE_EC_ED25519_SIG_SIZE;
+            case NID_ED448:
+                return T_COSE_EC_ED448_SIG_SIZE;
+            }
+        }
+        #endif
+        break;
+    case T_COSE_CRYPTO_LIB_PSA:
+        #ifdef T_COSE_USE_PSA_CRYPTO
+        {
+            psa_key_attributes_t attributes;
+            psa_status_t result = psa_get_key_attributes((mbedtls_svc_key_id_t)cose_key.k.key_handle, &attributes);
+            if (result != PSA_SUCCESS) {
+                return 0;
+            }
+            switch (psa_get_key_algorithm(&attributes)) {
+            case PSA_ALG_ED25519PH:
+                return T_COSE_EC_ED25519_SIG_SIZE;
+            case PSA_ALG_ED448PH:
+                return T_COSE_EC_ED448_SIG_SIZE;
+            }
+        }
+        #endif
+        break;
+    }
+    return 0;
+}
+
 static inline enum t_cose_err_t
 short_circuit_sig_size(int32_t            cose_algorithm_id,
+                       struct t_cose_key  cose_key,
                        size_t            *sig_size)
 {
     *sig_size = cose_algorithm_id == COSE_ALGORITHM_ES256 ? T_COSE_EC_P256_SIG_SIZE :
                 cose_algorithm_id == COSE_ALGORITHM_ES384 ? T_COSE_EC_P384_SIG_SIZE :
                 cose_algorithm_id == COSE_ALGORITHM_ES512 ? T_COSE_EC_P512_SIG_SIZE :
+                cose_algorithm_id == COSE_ALGORITHM_EDDSA ? eddsa_sig_size(cose_key) :
                 0;
 
     return sig_size == 0 ? T_COSE_ERR_UNSUPPORTED_SIGNING_ALG : T_COSE_SUCCESS;
@@ -84,6 +127,7 @@ short_circuit_sig_size(int32_t            cose_algorithm_id,
  */
 static inline enum t_cose_err_t
 short_circuit_sign(int32_t               cose_algorithm_id,
+                   struct t_cose_key     cose_key,
                    struct q_useful_buf_c hash_to_sign,
                    struct q_useful_buf   signature_buffer,
                    struct q_useful_buf_c *signature)
@@ -95,7 +139,7 @@ short_circuit_sign(int32_t               cose_algorithm_id,
     size_t            amount_to_copy;
     size_t            sig_size;
 
-    return_value = short_circuit_sig_size(cose_algorithm_id, &sig_size);
+    return_value = short_circuit_sig_size(cose_algorithm_id, cose_key, &sig_size);
 
     /* Check the signature length against buffer size */
     if(return_value != T_COSE_SUCCESS) {
@@ -391,10 +435,12 @@ t_cose_sign1_encode_signature_aad_internal(struct t_cose_sign1_sign_ctx *me,
             /* Output size calculation. Only need signature size. */
             signature.ptr = NULL;
             return_value = short_circuit_sig_size(me->cose_algorithm_id,
+                                                  me->signing_key,
                                                   &signature.len);
         } else {
             /* Perform the a short circuit signing */
             return_value = short_circuit_sign(me->cose_algorithm_id,
+                                              me->signing_key,
                                               tbs_hash,
                                               buffer_for_signature,
                                               &signature);
