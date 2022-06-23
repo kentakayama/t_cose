@@ -1,7 +1,7 @@
 /*
  * t_cose_psa_crypto.c
  *
- * Copyright 2019, Laurence Lundblade
+ * Copyright 2019-2022, Laurence Lundblade
  *
  * SPDX-License-Identifier: BSD-3-Clause
  *
@@ -15,8 +15,8 @@
  * \brief Crypto Adaptation for t_cose to use ARM's PSA ECDSA and hashes.
  *
  * This connects up the abstract interface in t_cose_crypto.h to the
- * implementations of ECDSA signing and hashing in ARM's PSA crypto
- * library.
+ * implementations of ECDSA signing and hashing in ARM's Mbed TLS  crypto
+ * library that implements the Arm PSA 1.0 crypto API.
  *
  * This adapter layer doesn't bloat the implementation as everything
  * here had to be done anyway -- the mapping of algorithm IDs, the
@@ -37,24 +37,6 @@
 #include "t_cose_crypto.h"  /* The interface this implements */
 #include <psa/crypto.h>     /* PSA Crypto Interface to mbed crypto or such */
 
-
-/* Here's the auto-detect and manual override logic for managing PSA
- * Crypto API compatibility.
- *
- * PSA_GENERATOR_UNBRIDLED_CAPACITY happens to be defined in MBed
- * Crypto 1.1 and not in MBed Crypto 2.0 so it is what auto-detect
- * hinges off of.
- *
- * T_COSE_USE_PSA_CRYPTO_FROM_MBED_CRYPTO20 can be defined to force
- * setting to MBed Crypto 2.0
- *
- * T_COSE_USE_PSA_CRYPTO_FROM_MBED_CRYPTO11 can be defined to force
- * setting to MBed Crypt 1.1. It is also what the code below hinges
- * on.
- */
-#if defined(PSA_GENERATOR_UNBRIDLED_CAPACITY) && !defined(T_COSE_USE_PSA_CRYPTO_FROM_MBED_CRYPTO20)
-#define T_COSE_USE_PSA_CRYPTO_FROM_MBED_CRYPTO11
-#endif
 
 
 /* Avoid compiler warning due to unused argument */
@@ -108,16 +90,16 @@ static enum t_cose_err_t psa_status_to_t_cose_error_signing(psa_status_t err)
  * See documentation in t_cose_crypto.h
  */
 enum t_cose_err_t
-t_cose_crypto_pub_key_verify(int32_t               cose_algorithm_id,
-                             struct t_cose_key     verification_key,
-                             struct q_useful_buf_c kid,
-                             struct q_useful_buf_c hash_to_verify,
-                             struct q_useful_buf_c signature)
+t_cose_crypto_verify(int32_t               cose_algorithm_id,
+                     struct t_cose_key     verification_key,
+                     struct q_useful_buf_c kid,
+                     struct q_useful_buf_c hash_to_verify,
+                     struct q_useful_buf_c signature)
 {
-    psa_algorithm_t   psa_alg_id;
-    psa_status_t      psa_result;
-    enum t_cose_err_t return_value;
-    psa_key_handle_t  verification_key_psa;
+    psa_algorithm_t       psa_alg_id;
+    psa_status_t          psa_result;
+    enum t_cose_err_t     return_value;
+    mbedtls_svc_key_id_t  verification_key_psa;
 
     /* This implementation does no look up keys by kid in the key
      * store */
@@ -141,23 +123,14 @@ t_cose_crypto_pub_key_verify(int32_t               cose_algorithm_id,
         goto Done;
     }
 
-    verification_key_psa = (psa_key_handle_t)verification_key.k.key_handle;
+    verification_key_psa = (mbedtls_svc_key_id_t)verification_key.k.key_handle;
 
-
-    /* The official PSA Crypto API expected to be formally set in 2020
-     * uses psa_verify_hash() instead of psa_verify_hash().
-     * This older API is used because Mbed Crypto 2.0 provides
-     * backwards compatibility to this with crypto_compat.h and there
-     * is no forward compatibility in the other direction. If Mbed
-     * Crypto ceases providing backwards compatibility then this code
-     * has to be changed to use psa_verify_hash().
-     */
     psa_result = psa_verify_hash(verification_key_psa,
-                                       psa_alg_id,
-                                       hash_to_verify.ptr,
-                                       hash_to_verify.len,
-                                       signature.ptr,
-                                       signature.len);
+                                 psa_alg_id,
+                                 hash_to_verify.ptr,
+                                 hash_to_verify.len,
+                                 signature.ptr,
+                                 signature.len);
 
     return_value = psa_status_to_t_cose_error_signing(psa_result);
 
@@ -170,17 +143,17 @@ t_cose_crypto_pub_key_verify(int32_t               cose_algorithm_id,
  * See documentation in t_cose_crypto.h
  */
 enum t_cose_err_t
-t_cose_crypto_pub_key_sign(int32_t                cose_algorithm_id,
-                           struct t_cose_key      signing_key,
-                           struct q_useful_buf_c  hash_to_sign,
-                           struct q_useful_buf    signature_buffer,
-                           struct q_useful_buf_c *signature)
+t_cose_crypto_sign(int32_t                cose_algorithm_id,
+                   struct t_cose_key      signing_key,
+                   struct q_useful_buf_c  hash_to_sign,
+                   struct q_useful_buf    signature_buffer,
+                   struct q_useful_buf_c *signature)
 {
-    enum t_cose_err_t return_value;
-    psa_status_t      psa_result;
-    psa_algorithm_t   psa_alg_id;
-    psa_key_handle_t  signing_key_psa;
-    size_t            signature_len;
+    enum t_cose_err_t     return_value;
+    psa_status_t          psa_result;
+    psa_algorithm_t       psa_alg_id;
+    mbedtls_svc_key_id_t  signing_key_psa;
+    size_t                signature_len;
 
     psa_alg_id = cose_alg_id_to_psa_alg_id(cose_algorithm_id);
 
@@ -199,26 +172,19 @@ t_cose_crypto_pub_key_sign(int32_t                cose_algorithm_id,
         goto Done;
     }
 
-    signing_key_psa = (psa_key_handle_t)signing_key.k.key_handle;
+    signing_key_psa = (mbedtls_svc_key_id_t)signing_key.k.key_handle;
 
     /* It is assumed that this call is checking the signature_buffer
      * length and won't write off the end of it.
      */
-    /* The official PSA Crypto API expected to be formally set in 2020
-     * uses psa_sign_hash() instead of psa_sign_hash().  This
-     * older API is used because Mbed Crypto 2.0 provides backwards
-     * compatibility to this crypto_compat.h and there is no forward
-     * compatibility in the other direction. If Mbed Crypto ceases
-     * providing backwards compatibility then this code has to be
-     * changed to use psa_sign_hash().
-     */
+
     psa_result = psa_sign_hash(signing_key_psa,
-                                     psa_alg_id,
-                                     hash_to_sign.ptr,
-                                     hash_to_sign.len,
-                                     signature_buffer.ptr, /* Sig buf */
-                                     signature_buffer.len, /* Sig buf size */
-                                    &signature_len);       /* Sig length */
+                               psa_alg_id,
+                               hash_to_sign.ptr,
+                               hash_to_sign.len,
+                               signature_buffer.ptr, /* Sig buf */
+                               signature_buffer.len, /* Sig buf size */
+                              &signature_len);       /* Sig length */
 
     return_value = psa_status_to_t_cose_error_signing(psa_result);
 
@@ -240,17 +206,19 @@ enum t_cose_err_t t_cose_crypto_sig_size(int32_t           cose_algorithm_id,
                                          struct t_cose_key signing_key,
                                          size_t           *sig_size)
 {
-    enum t_cose_err_t return_value;
-    psa_key_handle_t  signing_key_psa;
-    size_t            key_len_bits;
-    size_t            key_len_bytes;
+    enum t_cose_err_t     return_value;
+    mbedtls_svc_key_id_t  signing_key_psa;
+    size_t                key_len_bits;
+    size_t                key_len_bytes;
+    psa_key_attributes_t  key_attributes;
+    psa_status_t          status;
 
     /* If desperate to save code, this can return the constant
      * T_COSE_MAX_SIG_SIZE instead of doing an exact calculation.  The
      * buffer size calculation will return too large of a value and
      * waste a little heap / stack, but everything will still work
      * (except the tests that test for exact values will fail). This
-     * will save 100 bytes or so of obejct code.
+     * will save 100 bytes or so of object code.
      */
 
     if(!t_cose_algorithm_is_ecdsa(cose_algorithm_id)) {
@@ -258,37 +226,11 @@ enum t_cose_err_t t_cose_crypto_sig_size(int32_t           cose_algorithm_id,
         goto Done;
     }
 
-    signing_key_psa = (psa_key_handle_t)signing_key.k.key_handle;
-
-#ifdef T_COSE_USE_PSA_CRYPTO_FROM_MBED_CRYPTO11
-    /* This code is for MBed Crypto 1.1. It uses an older version of
-     * the PSA Crypto API that is not compatible with the new
-     * versions. When all environments (particularly TF-M) are on the
-     * latest API, this code will no longer be necessary.
-     */
-
-    psa_key_type_t    key_type;
-
-    psa_status_t status = psa_get_key_information(signing_key_psa,
-                                                  &key_type,
-                                                  &key_len_bits);
-
-    (void)key_type; /* Avoid unused parameter error */
-
-#else /* T_COSE_USE_PSA_CRYPTO_FROM_MBED_CRYPTO11 */
-    /* This code is for Mbed Crypto 2.0 circa 2019. The PSA Crypto API
-     * is supposed to be offically locked down in 2020 and should be
-     * very close to this, so this is likely the code to use with MBed
-     * Crypto going forward.
-     */
-
-    psa_key_attributes_t key_attributes = psa_key_attributes_init();
-
-    psa_status_t status = psa_get_key_attributes(signing_key_psa, &key_attributes);
-
+    signing_key_psa = (mbedtls_svc_key_id_t)signing_key.k.key_handle;
+    key_attributes = psa_key_attributes_init();
+    status = psa_get_key_attributes(signing_key_psa, &key_attributes);
     key_len_bits = psa_get_key_bits(&key_attributes);
 
-#endif /* T_COSE_USE_PSA_CRYPTO_FROM_MBED_CRYPTO11 */
 
     return_value = psa_status_to_t_cose_error_signing(status);
     if(return_value == T_COSE_SUCCESS) {
