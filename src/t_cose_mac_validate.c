@@ -123,9 +123,9 @@ enum t_cose_err_t t_cose_mac_validate_private(struct t_cose_mac_validate_ctx *co
                                             struct t_cose_parameter  **return_params)
 {
     (void)aad;
-    (void)payload_is_detached;
     QCBORDecodeContext            decode_context;
     struct q_useful_buf_c         protected_parameters;
+    QCBORItem                     item;
     QCBORError                    qcbor_error;
 
     enum t_cose_err_t             return_value;
@@ -137,7 +137,6 @@ enum t_cose_err_t t_cose_mac_validate_private(struct t_cose_mac_validate_ctx *co
     struct t_cose_crypto_hmac     hmac_ctx;
     struct t_cose_parameter   *decoded_params;
 
-    *payload = NULL_Q_USEFUL_BUF_C;
     decoded_params = NULL; // TODO: check that this is right and necessary
 
     QCBORDecode_Init(&decode_context, cose_mac, QCBOR_DECODE_MODE_NORMAL);
@@ -164,7 +163,15 @@ enum t_cose_err_t t_cose_mac_validate_private(struct t_cose_mac_validate_ctx *co
                           &protected_parameters);
 
     /* --- The payload --- */
-    QCBORDecode_GetByteString(&decode_context, payload);
+    QCBORDecode_PeekNext(&decode_context, &item);
+    if (item.uDataType == QCBOR_TYPE_BYTE_STRING) {
+        QCBORDecode_GetByteString(&decode_context, payload);
+    }
+    else if (item.uDataType == QCBOR_TYPE_NULL) {
+        /* detached payload: the payload should be set by caller */
+        QCBORDecode_GetNull(&decode_context);
+    }
+
 
     /* --- The tag --- */
     QCBORDecode_GetByteString(&decode_context, &tag);

@@ -31,7 +31,6 @@ t_cose_mac_compute_private(struct t_cose_mac_calculate_ctx *context,
                       struct q_useful_buf                out_buf,
                       struct q_useful_buf_c             *result)
 {
-    (void)payload_is_detached;
     (void)aad;
     QCBOREncodeContext  encode_ctx;
     enum t_cose_err_t   return_value;
@@ -45,9 +44,19 @@ t_cose_mac_compute_private(struct t_cose_mac_calculate_ctx *context,
         goto Done;
     }
 
-    QCBOREncode_AddEncoded(&encode_ctx, payload);
+    if (payload_is_detached) {
+        /* detached payload:
+         * the payload should be transfered in another channel
+         */
+        QCBOREncode_AddNULL(&encode_ctx);
+    } else {
+        /* --- Get started on the payload --- */
+        QCBOREncode_BstrWrap(&encode_ctx);
+        QCBOREncode_AddEncoded(&encode_ctx, payload);
+        QCBOREncode_CloseBstrWrap2(&encode_ctx, false, NULL);
+    }
 
-    return_value = t_cose_mac_encode_tag(context,&encode_ctx);
+    return_value = t_cose_mac_encode_tag(context, &encode_ctx, payload);
     if(return_value) {
         goto Done;
     }
@@ -105,9 +114,6 @@ t_cose_mac_encode_parameters(struct t_cose_mac_calculate_ctx *me,
        &me->protected_parameters
     );
 
-    /* --- Get started on the payload --- */
-    QCBOREncode_BstrWrap(cbor_encode_ctx);
-
     /*
      * Any failures in CBOR encoding will be caught in finish
      * when the CBOR encoding is closed off. No need to track
@@ -122,7 +128,8 @@ t_cose_mac_encode_parameters(struct t_cose_mac_calculate_ctx *me,
  */
 enum t_cose_err_t
 t_cose_mac_encode_tag(struct t_cose_mac_calculate_ctx *me,
-                      QCBOREncodeContext              *cbor_encode_ctx)
+                      QCBOREncodeContext              *cbor_encode_ctx,
+                      struct q_useful_buf_c            maced_payload)
 
 {
     enum t_cose_err_t            return_value;
@@ -137,9 +144,6 @@ t_cose_mac_encode_tag(struct t_cose_mac_calculate_ctx *me,
     Q_USEFUL_BUF_MAKE_STACK_UB(  tbm_first_part_buf,
                                  T_COSE_SIZE_OF_TBM);
     struct t_cose_crypto_hmac    hmac_ctx;
-    struct q_useful_buf_c        maced_payload;
-
-    QCBOREncode_CloseBstrWrap2(cbor_encode_ctx, false, &maced_payload);
 
     /* Check that there are no CBOR encoding errors before proceeding
      * with hashing and tagging. This is not actually necessary as the
