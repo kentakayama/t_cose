@@ -201,6 +201,8 @@ t_cose_mac_encode_parameters(struct t_cose_mac_calculate_ctx *context,
  *
  * \param[in] context          The t_cose signing context.
  * \param[in] cbor_encode_ctx  Encoding context to output to.
+ * \param[in] maced_payload    Pointer and length of payload to calculate mac.
+
  *
  * \return This returns one of the error codes defined by \ref t_cose_err_t.
  *
@@ -214,8 +216,8 @@ t_cose_mac_encode_parameters(struct t_cose_mac_calculate_ctx *context,
  */
 enum t_cose_err_t
 t_cose_mac_encode_tag(struct t_cose_mac_calculate_ctx *context,
-                       QCBOREncodeContext        *cbor_encode_ctx,
-                       struct q_useful_buf_c      maced_payload);
+                      QCBOREncodeContext              *cbor_encode_ctx,
+                      struct q_useful_buf_c            maced_payload);
 
 
 
