@@ -150,9 +150,12 @@ int_fast32_t sign_verify_mac_sig_fail_test()
         goto Done;
     }
 
+    UsefulBufC maced_payload;
+    QCBOREncode_BstrWrap(&cbor_encode);
     QCBOREncode_AddSZString(&cbor_encode, "payload");
+    QCBOREncode_CloseBstrWrap2(&cbor_encode, false, &maced_payload);
 
-    result = t_cose_mac_encode_tag(&sign_ctx, &cbor_encode);
+    result = t_cose_mac_encode_tag(&sign_ctx, &cbor_encode, maced_payload);
     if(result) {
         return_value = 3000 + (int32_t)result;
         goto Done;
@@ -228,9 +231,11 @@ static int size_test(int32_t               cose_algorithm_id,
         return 2000 + (int32_t)return_value;
     }
 
+    QCBOREncode_BstrWrap(&cbor_encode);
     QCBOREncode_AddEncoded(&cbor_encode, payload);
+    QCBOREncode_CloseBstrWrap2(&cbor_encode, false, NULL);
 
-    return_value = t_cose_mac_encode_tag(&sign_ctx, &cbor_encode);
+    return_value = t_cose_mac_encode_tag(&sign_ctx, &cbor_encode, payload);
     if(return_value) {
         return 3000 + (int32_t)return_value;
     }
@@ -251,9 +256,11 @@ static int size_test(int32_t               cose_algorithm_id,
         return 2000 + (int32_t)return_value;
     }
 
+    QCBOREncode_BstrWrap(&cbor_encode);
     QCBOREncode_AddEncoded(&cbor_encode, payload);
+    QCBOREncode_CloseBstrWrap2(&cbor_encode, false, NULL);
 
-    return_value = t_cose_mac_encode_tag(&sign_ctx, &cbor_encode);
+    return_value = t_cose_mac_encode_tag(&sign_ctx, &cbor_encode, payload);
     if(return_value) {
         return 3000 + (int32_t)return_value;
     }
