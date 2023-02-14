@@ -18,6 +18,13 @@
 #include <openssl/evp.h>
 #include <openssl/err.h>
 
+#define OPENSSL_VERSION_300 0x30000000L
+#if OPENSSL_VERSION_NUMBER >= OPENSSL_VERSION_300
+#include <openssl/params.h>
+#include <openssl/core_names.h>
+#include <openssl/core.h> /* Needed for OSSL_PARAM */
+#endif
+
 /**
  * \file t_cose_openssl_crypto.c
  *
@@ -408,9 +415,19 @@ configure_pkey_context(EVP_PKEY_CTX* context, int32_t cose_algorithm_id)
     int               ossl_result;
 
     if (t_cose_algorithm_is_ecdsa(cose_algorithm_id)) {
-        /* ECDSA doesn't need any further configuration of its context.
-         * The parameters are inferred from the key.
+        /*
+         * Enable deterministic ECDSA, see RFC6979.
          */
+        OSSL_PARAM params[2];
+        unsigned int nonce_type = 1;
+
+        params[0] = OSSL_PARAM_construct_uint(OSSL_SIGNATURE_PARAM_NONCE_TYPE, &nonce_type);
+        params[1] = OSSL_PARAM_construct_end();
+
+        if (!EVP_PKEY_CTX_set_params(context, params)) {
+            return_value = T_COSE_ERR_UNSUPPORTED_SIGNING_ALG;
+            goto Done;
+        }
         return_value = T_COSE_SUCCESS;
     } else if (t_cose_algorithm_is_rsassa_pss(cose_algorithm_id)) {
         /**
