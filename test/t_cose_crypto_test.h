@@ -14,11 +14,14 @@
 #include <stdint.h>
 
 
-int_fast32_t aead_test(void);
+int32_t aead_test(void);
 
-int_fast32_t kw_test(void);
+int32_t kw_test(void);
 
-int_fast32_t hkdf_test(void);
+int32_t hkdf_test(void);
+
+int32_t ecdh_test(void);
+
 
 
 #endif /* t_cose_crypto_test_h */

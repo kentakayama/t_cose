@@ -9,6 +9,7 @@
  */
 
 #include "t_cose_crypto_test.h"
+#include "init_keys.h"
 
 #include "../src/t_cose_crypto.h" /* NOT a public interface so this test can't run against an installed library */
 
@@ -42,7 +43,7 @@ static const uint8_t expected_empty_tag[] = {
     0xC9, 0x4A, 0xA9, 0xF3, 0x22, 0x75, 0x73, 0x8C, 0xD5, 0xCC, 0x75, 0x01, 0xA4, 0x80, 0xBC, 0xF5};
 #endif
 
-int_fast32_t aead_test(void)
+int32_t aead_test(void)
 {
     enum t_cose_err_t      err;
     int32_t                cose_algorithm_id;
@@ -60,7 +61,7 @@ int_fast32_t aead_test(void)
                                                   UsefulBuf_FROM_BYTE_ARRAY_LITERAL(test_key_0_128bit),
                                                  &key);
     if(err) {
-        return 1000 + (int_fast32_t)err;
+        return 1000 + (int32_t)err;
     }
 
     /* First the simplest case, no payload, no aad, just the tag */
@@ -72,7 +73,7 @@ int_fast32_t aead_test(void)
                                      ciphertext_buffer,
                                      &ciphertext);
     if(err) {
-        return 2000 + (int_fast32_t)err;
+        return 2000 + (int32_t)err;
     }
 
     /* TODO: proper define to know about test crypto */
@@ -101,7 +102,7 @@ int_fast32_t aead_test(void)
                                      &plaintext);
 
     if(err) {
-        return 3000 + (int_fast32_t)err;
+        return 3000 + (int32_t)err;
     }
 
     if(plaintext.len != 0) {
@@ -118,7 +119,7 @@ int_fast32_t aead_test(void)
                                      ciphertext_buffer,
                                      &ciphertext);
     if(err) {
-        return 4000 + (int_fast32_t)err;
+        return 4000 + (int32_t)err;
     }
 
     err = t_cose_crypto_aead_decrypt(cose_algorithm_id,
@@ -129,7 +130,7 @@ int_fast32_t aead_test(void)
                                      plaintext_buffer,
                                      &plaintext);
     if(err) {
-        return 5000 + (int_fast32_t)err;
+        return 5000 + (int32_t)err;
     }
 
     if(q_useful_buf_compare(Q_USEFUL_BUF_FROM_SZ_LITERAL("plain text"), plaintext)) {
@@ -149,7 +150,7 @@ int_fast32_t aead_test(void)
 
 #ifndef T_COSE_DISABLE_KEYWRAP
 
-int_fast32_t kw_test(void)
+int32_t kw_test(void)
 {
     struct t_cose_key kek;
     /* These are test vectors from RFC 3394 */
@@ -172,7 +173,7 @@ int_fast32_t kw_test(void)
          * this dynamically. The below tests will correctly link
          * on 2.28, but will fail to run so this exception is needed.
          */
-        return 0;
+        return INT32_MIN; /* Means no testing was actually done */
     }
 
     e = t_cose_crypto_make_symmetric_key_handle(T_COSE_ALGORITHM_A128GCM,
@@ -275,7 +276,7 @@ static const uint8_t tc1_okm_bytes[] = {
 };
 #endif
 
-int_fast32_t hkdf_test(void)
+int32_t hkdf_test(void)
 {
     Q_USEFUL_BUF_MAKE_STACK_UB(tc1_okm, 42);
     enum t_cose_err_t          err;
@@ -298,7 +299,49 @@ int_fast32_t hkdf_test(void)
                             okm)) {
         return 2;
     }
+#else
+    (void)okm;
 #endif
 
     return 0;
 }
+
+#ifndef T_COSE_USE_B_CON_SHA256 /* test crypto doesn't support ECDH */
+
+int32_t ecdh_test(void)
+{
+    enum t_cose_err_t           err;
+    struct t_cose_key           public_key;
+    struct t_cose_key           private_key;
+    struct q_useful_buf_c       shared_key;
+    Q_USEFUL_BUF_MAKE_STACK_UB( shared_key_buf, T_COSE_EXPORT_PUBLIC_KEY_MAX_SIZE);
+
+
+    err = init_fixed_test_ec_encryption_key(T_COSE_ELLIPTIC_CURVE_P_256,
+                                           &public_key,
+                                           &private_key);
+    if(err != T_COSE_SUCCESS) {
+        return -1;
+    }
+
+    err = t_cose_crypto_ecdh(private_key,
+                             public_key,
+                             shared_key_buf,
+                            &shared_key);
+
+    if(err != T_COSE_SUCCESS) {
+        return (int32_t)err;
+    }
+
+    /* TODO: this test should compare to an expected result, but
+     * haven't been able to get Mbed TLS and OpenSSL to produce
+     * that. Probably the issue is in the way the keys are imported
+     * and confusion about public vs private keys in imported
+     * key pairs (and lack of documentation in the crypto libraries)
+     */
+
+
+    return 0;
+
+}
+#endif /* T_COSE_USE_B_CON_SHA256 */

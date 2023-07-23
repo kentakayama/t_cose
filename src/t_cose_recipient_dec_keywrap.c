@@ -23,6 +23,7 @@
 enum t_cose_err_t
 t_cose_recipient_dec_keywrap_cb_private(struct t_cose_recipient_dec *me_x,
                                         const struct t_cose_header_location loc,
+                                        const struct t_cose_alg_and_bits ce_alg,
                                         QCBORDecodeContext *cbor_decoder,
                                         struct q_useful_buf cek_buffer,
                                         struct t_cose_parameter_storage *p_storage,
@@ -37,12 +38,13 @@ t_cose_recipient_dec_keywrap_cb_private(struct t_cose_recipient_dec *me_x,
 
     struct t_cose_recipient_dec_keywrap *me = (struct t_cose_recipient_dec_keywrap *)me_x;
 
+    (void)ce_alg; /* No COSE_KDF_Context is built for key wrap. */
+
     /* ---- The array of three that is a COSE_Recipient ---- */
     QCBORDecode_EnterArray(cbor_decoder, NULL);
 
     // TODO: support the header decode callbacks
     /* ----  First and second items -- protected & unprotected headers  ---- */
-    *params = NULL;
     err = t_cose_headers_decode(cbor_decoder, /* in: decoder to read from */
                                 loc,          /* in: location in COSE message */
                                 NULL,         /* in: callback for specials */
@@ -74,7 +76,7 @@ t_cose_recipient_dec_keywrap_cb_private(struct t_cose_recipient_dec *me_x,
                                                   T_COSE_ERR_RECIPIENT_FORMAT);
     }
 
-    cose_algorithm_id = t_cose_find_parameter_alg_id(*params, false);
+    cose_algorithm_id = t_cose_param_find_alg_id(*params, false);
 
     // TODO: should probably check the kid here
 

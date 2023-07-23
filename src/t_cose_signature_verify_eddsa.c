@@ -2,6 +2,7 @@
  * t_cose_signature_verify_eddsa.c
  *
  * Copyright (c) 2023, Laurence Lundblade. All rights reserved.
+ * Copyright (c) 2023, Arm Limited. All rights reserved.
  * Created by Laurence Lundblade on 11/19/22.
  *
  * SPDX-License-Identifier: BSD-3-Clause
@@ -17,7 +18,6 @@
 #include "t_cose_util.h"
 #include "t_cose_crypto.h"
 
-#ifndef T_COSE_DISABLE_EDDSA
 
 /** This is an implementation of \ref t_cose_signature_verify1_cb. */
 static enum t_cose_err_t
@@ -35,7 +35,7 @@ t_cose_signature_verify1_eddsa_cb(struct t_cose_signature_verify *me_x,
     struct q_useful_buf_c        tbs;
 
     /* --- Get the parameters values needed --- */
-    cose_algorithm_id = t_cose_find_parameter_alg_id(parameter_list, true);
+    cose_algorithm_id = t_cose_param_find_alg_id(parameter_list, true);
     if(cose_algorithm_id == T_COSE_ALGORITHM_NONE) {
         return_value = T_COSE_ERR_NO_ALG_ID;
         goto Done;
@@ -45,7 +45,7 @@ t_cose_signature_verify1_eddsa_cb(struct t_cose_signature_verify *me_x,
         goto Done;
     }
 
-    kid = t_cose_find_parameter_kid(parameter_list);
+    kid = t_cose_param_find_kid(parameter_list);
     if(!q_useful_buf_c_is_null(me->verification_kid)) {
         if(q_useful_buf_c_is_null(kid)) {
             return T_COSE_ERR_NO_KID;
@@ -91,7 +91,6 @@ t_cose_signature_verify1_eddsa_cb(struct t_cose_signature_verify *me_x,
     }
 
     return_value = t_cose_crypto_verify_eddsa(me->verification_key,
-                                              kid,
                                               NULL,
                                               tbs,
                                               signature);
@@ -124,6 +123,7 @@ t_cose_signature_verify_eddsa_cb(struct t_cose_signature_verify  *me_x,
                                  QCBORDecodeContext             *cbor_decoder,
                                  struct t_cose_parameter       **decoded_params)
 {
+#ifndef T_COSE_DISABLE_COSE_SIGN
     const struct t_cose_signature_verify_eddsa *me =
                             (const struct t_cose_signature_verify_eddsa *)me_x;
     QCBORError             qcbor_error;
@@ -169,6 +169,19 @@ t_cose_signature_verify_eddsa_cb(struct t_cose_signature_verify  *me_x,
                                                      signature);
 Done:
     return return_value;
+
+#else /* !T_COSE_DISABLE_COSE_SIGN */
+
+    (void)me_x;
+    (void)option_flags;
+    (void)loc;
+    (void)sign_inputs;
+    (void)param_storage;
+    (void)cbor_decoder;
+    (void)decoded_params;
+
+    return T_COSE_ERR_UNSUPPORTED;
+#endif /* !T_COSE_DISABLE_COSE_SIGN */
 }
 
 
@@ -177,6 +190,7 @@ t_cose_signature_verify_eddsa_init(struct t_cose_signature_verify_eddsa *me,
                                    uint32_t option_flags)
 {
     memset(me, 0, sizeof(*me));
+    me->s.rs.ident   = RS_IDENT(TYPE_RS_VERIFIER, 'E');
     me->s.verify_cb   = t_cose_signature_verify_eddsa_cb;
     me->s.verify1_cb  = t_cose_signature_verify1_eddsa_cb;
     me->option_flags = option_flags;
@@ -186,9 +200,3 @@ t_cose_signature_verify_eddsa_init(struct t_cose_signature_verify_eddsa *me,
      */
     me->auxiliary_buffer.len = SIZE_MAX;
 }
-
-#else
-
-void t_cose_signature_verify_eddsa_placeholder(void) {}
-
-#endif

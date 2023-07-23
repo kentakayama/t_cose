@@ -17,6 +17,7 @@
 #include "t_cose_crypto.h"
 #include "t_cose/t_cose_parameters.h"
 #include "t_cose_util.h"
+#include "t_cose_qcbor_gap.h"
 
 
 /* These errors do not stop the calling of further verifiers for
@@ -62,6 +63,7 @@ is_soft_verify_error(enum t_cose_err_t error)
 static enum t_cose_err_t
 decrypt_one_recipient(struct t_cose_encrypt_dec_ctx      *me,
                       const struct t_cose_header_location header_location,
+                      const struct t_cose_alg_and_bits    ce_alg,
                       QCBORDecodeContext                 *cbor_decoder,
                       struct q_useful_buf                 cek_buffer,
                       struct t_cose_parameter           **rcpnt_params_list,
@@ -69,12 +71,9 @@ decrypt_one_recipient(struct t_cose_encrypt_dec_ctx      *me,
 {
     struct t_cose_recipient_dec *rcpnt_decoder;
     enum t_cose_err_t            return_value;
+    QCBORSaveDecodeCursor        saved_cursor;
 
-#ifdef QCBOR_FOR_T_COSE_2
-    SaveDecodeCursor saved_cursor;
-
-    QCBORDecode_SaveCursor(qcbor_decoder, &saved_cursor);
-#endif
+    QCBORDecode_SaveCursor(cbor_decoder, &saved_cursor);
 
     /* Loop over the configured recipients */
     for(rcpnt_decoder = me->recipient_list;
@@ -85,11 +84,12 @@ decrypt_one_recipient(struct t_cose_encrypt_dec_ctx      *me,
             rcpnt_decoder->decode_cb(
                 rcpnt_decoder,     /* in: me ptr of the recipient decoder */
                 header_location,   /* in: header location to record */
+                ce_alg,            /* in: alg & bits for COSE_KDF_Context construction */
                 cbor_decoder,      /* in: CBOR decoder context */
                 cek_buffer,        /* in: buffer to write CEK to */
                 me->p_storage,     /* in: parameter nodes storage pool */
                 rcpnt_params_list, /* out: linked list of decoded params */
-                cek
+                cek                /* out: the returned CEK */
            );
 
         /* This is pretty much the same as for decrypting recipients */
@@ -110,11 +110,8 @@ decrypt_one_recipient(struct t_cose_encrypt_dec_ctx      *me,
         }
 
         /* Loop continues on for the next recipient */
-#ifdef QCBOR_FOR_T_COSE_2
-        QCBORDecode_RestoreCursor(qcbor_decoder, &saved_cursor);
-#else
-        return T_COSE_ERR_CANT_PROCESS_MULTIPLE;
-#endif
+        QCBORDecode_RestoreCursor(cbor_decoder, &saved_cursor);
+
     }
 
     /* Got to end of list and no recipient attempted to verify */
@@ -138,13 +135,13 @@ t_cose_encrypt_dec_detached(struct t_cose_encrypt_dec_ctx* me,
     QCBORDecodeContext             cbor_decoder;
     QCBORItem                      array_item;
     QCBORError                     cbor_error;
-    uint32_t                       message_type;
+    uint64_t                       message_type;
     struct t_cose_header_location  header_location;
     struct t_cose_parameter       *body_params_list;
     struct q_useful_buf_c          nonce_cbor;
-    int32_t                        body_enc_algorithm_id;
     struct q_useful_buf_c          protected_params;
     struct q_useful_buf_c          cipher_text;
+    struct t_cose_alg_and_bits     ce_alg;
     struct q_useful_buf_c          cek;
     struct t_cose_key              cek_key;
     MakeUsefulBufOnStack(          cek_buf, T_COSE_MAX_SYMMETRIC_KEY_LENGTH);
@@ -160,19 +157,24 @@ t_cose_encrypt_dec_detached(struct t_cose_encrypt_dec_ctx* me,
 
     QCBORDecode_EnterArray(&cbor_decoder, &array_item);
 
-    message_type = me->option_flags & T_COSE_OPT_MESSAGE_TYPE_MASK;
-
-    /* Check whether tag is CBOR_TAG_COSE_ENCRYPT or CBOR_TAG_COSE_ENCRYPT0 */
-    // TODO: allow tag determination of message_type
-    if (QCBORDecode_IsTagged(&cbor_decoder, &array_item, CBOR_TAG_COSE_ENCRYPT) == false &&
-        QCBORDecode_IsTagged(&cbor_decoder, &array_item, CBOR_TAG_COSE_ENCRYPT0) == false) {
-        return T_COSE_ERR_INCORRECTLY_TAGGED;
+    const uint64_t signing_tag_nums[] = {CBOR_TAG_COSE_ENCRYPT, CBOR_TAG_COSE_ENCRYPT0, CBOR_TAG_INVALID64};
+    return_value = t_cose_tags_and_type(signing_tag_nums,
+                                        me->option_flags,
+                                        &array_item,
+                                        &cbor_decoder,
+                                        me->unprocessed_tag_nums,
+                                       &message_type);
+    if(return_value != T_COSE_SUCCESS) {
+        goto Done;
     }
+
 
     /* --- The header parameters --- */
     /* The location of body header parameters is 0, 0 */
     header_location.nesting = 0;
     header_location.index   = 0;
+    body_params_list = NULL;
+    rcpnt_params_list = NULL;
 
     return_value =
         t_cose_headers_decode(
@@ -188,9 +190,14 @@ t_cose_encrypt_dec_detached(struct t_cose_encrypt_dec_ctx* me,
         goto Done;
     }
 
-    nonce_cbor = t_cose_find_parameter_iv(body_params_list);
-    body_enc_algorithm_id = t_cose_find_parameter_alg_id(body_params_list, true);
+    nonce_cbor = t_cose_param_find_iv(body_params_list);
+    ce_alg.cose_alg_id = t_cose_param_find_alg_id(body_params_list, true);
     all_params_list = body_params_list;
+
+    ce_alg.bits_in_key = bits_in_crypto_alg(ce_alg.cose_alg_id);
+    if(ce_alg.bits_in_key == UINT32_MAX) {
+        return T_COSE_ERR_UNSUPPORTED_ENCRYPTION_ALG;
+    }
 
     /* --- The Ciphertext --- */
     if(!q_useful_buf_c_is_null(detached_ciphertext)) {
@@ -217,6 +224,7 @@ t_cose_encrypt_dec_detached(struct t_cose_encrypt_dec_ctx* me,
         while(1) {
             return_value = decrypt_one_recipient(me,
                                                  header_location,
+                                                 ce_alg,
                                                  &cbor_decoder,
                                                  cek_buf,
                                                 &rcpnt_params_list,
@@ -245,18 +253,15 @@ t_cose_encrypt_dec_detached(struct t_cose_encrypt_dec_ctx* me,
         /* Successfully decoded one recipient */
         QCBORDecode_ExitArray(&cbor_decoder);
 
-        if(all_params_list == NULL) {
-            all_params_list = rcpnt_params_list;
-        } else {
-            t_cose_parameter_list_append(all_params_list, rcpnt_params_list);
-        }
+
+        t_cose_params_append(&all_params_list, rcpnt_params_list);
 
         /* The decrypted cek bytes must be a t_cose_key for the AEAD API */
         return_value =
             t_cose_crypto_make_symmetric_key_handle(
-                body_enc_algorithm_id, /* in: algorithm ID */
-                cek,                   /* in: CEK bytes */
-                &cek_key               /* out: t_cose_key */
+                ce_alg.cose_alg_id,  /* in: algorithm ID */
+                cek,                 /* in: CEK bytes */
+                &cek_key             /* out: t_cose_key */
             );
         if(return_value != T_COSE_SUCCESS) {
             goto Done;
@@ -279,6 +284,14 @@ t_cose_encrypt_dec_detached(struct t_cose_encrypt_dec_ctx* me,
     }
     if(returned_parameters != NULL) {
         *returned_parameters = all_params_list;
+    }
+
+    /* --- Check for critical parameters --- */
+    if(!(me->option_flags & T_COSE_OPT_NO_CRIT_PARAM_CHECK)) {
+        return_value = t_cose_params_check(all_params_list);
+        if(return_value != T_COSE_SUCCESS) {
+            goto Done;
+        }
     }
 
     /* A lot of stuff is done now: 1) All the CBOR decoding is done, 2) we
@@ -313,10 +326,9 @@ t_cose_encrypt_dec_detached(struct t_cose_encrypt_dec_ctx* me,
 
     /* --- The body/content decryption --- */
     // TODO: handle AE algorithms
-    // TODO: handle single-recipient HPKE
     return_value =
         t_cose_crypto_aead_decrypt(
-            body_enc_algorithm_id, /* in: cose alg id to decrypt payload */
+            ce_alg.cose_alg_id,    /* in: cose alg id to decrypt payload */
             cek_key,               /* in: content encryption key */
             nonce_cbor,            /* in: iv / nonce for decrypt */
             enc_structure,         /* in: the AAD for the AEAD */

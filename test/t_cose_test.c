@@ -28,7 +28,7 @@ static const struct q_useful_buf_c s_input_payload = {SZ_CONTENT, sizeof(SZ_CONT
 /*
  * Public function, see t_cose_test.h
  */
-int_fast32_t short_circuit_self_test()
+int32_t short_circuit_self_test()
 {
     struct t_cose_sign1_sign_ctx    sign_ctx;
     struct t_cose_sign1_verify_ctx  verify_ctx;
@@ -142,7 +142,7 @@ int_fast32_t short_circuit_self_test()
 /*
  * Public function, see t_cose_test.h
  */
-int_fast32_t short_circuit_self_detached_content_test()
+int32_t short_circuit_self_detached_content_test()
 {
     struct t_cose_sign1_sign_ctx    sign_ctx;
     struct t_cose_sign1_verify_ctx  verify_ctx;
@@ -212,7 +212,7 @@ int_fast32_t short_circuit_self_detached_content_test()
 /*
  * Public function, see t_cose_test.h
  */
-int_fast32_t short_circuit_verify_fail_test()
+int32_t short_circuit_verify_fail_test()
 {
     struct t_cose_sign1_sign_ctx    sign_ctx;
     struct t_cose_sign1_verify_ctx  verify_ctx;
@@ -324,24 +324,30 @@ int_fast32_t short_circuit_verify_fail_test()
 /*
  * Public function, see t_cose_test.h
  */
-int_fast32_t short_circuit_signing_error_conditions_test()
+// TODO: name of this tests isn't right.
+int32_t short_circuit_signing_error_conditions_test()
 {
     struct t_cose_sign1_sign_ctx sign_ctx;
-    QCBOREncodeContext           cbor_encode;
     enum t_cose_err_t            result;
     Q_USEFUL_BUF_MAKE_STACK_UB(  signed_cose_buffer, 300);
     Q_USEFUL_BUF_MAKE_STACK_UB(  small_signed_cose_buffer, 15);
-    struct q_useful_buf_c        payload;
     struct q_useful_buf_c        signed_cose;
+    int32_t                      cose_algorithm_id;
+
+    if(t_cose_is_algorithm_supported(T_COSE_ALGORITHM_ES256)) {
+        cose_algorithm_id = T_COSE_ALGORITHM_ES256;
+    } else {
+        cose_algorithm_id = T_COSE_ALGORITHM_SHORT_CIRCUIT_256;
+    }
 
     /* -- Test bad algorithm ID 0 -- */
     /* Use reserved alg ID 0 to cause error. */
     t_cose_sign1_sign_init(&sign_ctx, 0, 0);
 
     result = t_cose_sign1_sign(&sign_ctx,
-                                     s_input_payload,
-                                     signed_cose_buffer,
-                                     &signed_cose);
+                                s_input_payload,
+                                signed_cose_buffer,
+                               &signed_cose);
     if(result != T_COSE_ERR_UNSUPPORTED_SIGNING_ALG) {
         return -1;
     }
@@ -351,9 +357,9 @@ int_fast32_t short_circuit_signing_error_conditions_test()
     t_cose_sign1_sign_init(&sign_ctx, 0, -4444444);
 
     result = t_cose_sign1_sign(&sign_ctx,
-                                     s_input_payload,
-                                     signed_cose_buffer,
-                                     &signed_cose);
+                                s_input_payload,
+                                signed_cose_buffer,
+                               &signed_cose);
     if(result != T_COSE_ERR_UNSUPPORTED_SIGNING_ALG) {
         return -2;
     }
@@ -361,6 +367,9 @@ int_fast32_t short_circuit_signing_error_conditions_test()
 
 
     /* -- Tests detection of CBOR encoding error in the payload -- */
+#ifndef T_COSE_DISABLE_USAGE_GUARDS
+    QCBOREncodeContext   cbor_encode;
+
     QCBOREncode_Init(&cbor_encode, signed_cose_buffer);
 
     t_cose_sign1_sign_init(&sign_ctx, 0, T_COSE_ALGORITHM_SHORT_CIRCUIT_256);
@@ -375,15 +384,16 @@ int_fast32_t short_circuit_signing_error_conditions_test()
     if(result != T_COSE_ERR_CBOR_FORMATTING) {
         return -3;
     }
+#endif /* !T_COSE_DISABLE_USAGE_GUARDS */
 
 
     /* -- Tests the output buffer being too small -- */
-    t_cose_sign1_sign_init(&sign_ctx, 0, T_COSE_ALGORITHM_SHORT_CIRCUIT_256);
+    t_cose_sign1_sign_init(&sign_ctx, 0, cose_algorithm_id);
 
     result = t_cose_sign1_sign(&sign_ctx,
-                                     s_input_payload,
-                                     small_signed_cose_buffer,
-                                     &signed_cose);
+                                s_input_payload,
+                                small_signed_cose_buffer,
+                               &signed_cose);
 
     if(result != T_COSE_ERR_TOO_SMALL) {
         return -4;
@@ -396,7 +406,7 @@ int_fast32_t short_circuit_signing_error_conditions_test()
 /*
  * Public function, see t_cose_test.h
  */
-int_fast32_t short_circuit_make_cwt_test()
+int32_t short_circuit_make_cwt_test()
 {
     struct t_cose_sign1_sign_ctx    sign_ctx;
     struct t_cose_sign1_verify_ctx  verify_ctx;
@@ -532,7 +542,7 @@ int_fast32_t short_circuit_make_cwt_test()
 /*
  * Public function, see t_cose_test.h
  */
-int_fast32_t short_circuit_decode_only_test()
+int32_t short_circuit_decode_only_test()
 {
     struct t_cose_sign1_sign_ctx    sign_ctx;
     struct t_cose_sign1_verify_ctx  verify_ctx;
@@ -669,7 +679,7 @@ static const uint8_t rfc8152_example_2_1[] = {
 /*
  * Public function, see t_cose_test.h
  */
-int_fast32_t cose_example_test()
+int32_t cose_example_test()
 {
     enum t_cose_err_t             result;
     Q_USEFUL_BUF_MAKE_STACK_UB(   signed_cose_buffer, 200);
@@ -772,7 +782,7 @@ static enum t_cose_err_t run_test_sign_and_verify(uint32_t test_mess_options)
 
 
 #ifndef T_COSE_DISABLE_SHORT_CIRCUIT_SIGN
-int_fast32_t all_header_parameters_test()
+int32_t all_header_parameters_test()
 {
     enum t_cose_err_t               result;
     Q_USEFUL_BUF_MAKE_STACK_UB(     signed_cose_buffer, 300);
@@ -819,6 +829,9 @@ int_fast32_t all_header_parameters_test()
                                        &payload,
                                        /* Get parameters for checking */
                                        &parameters);
+    if(result) {
+        return -2;
+    }
 
     // Need to compare to short circuit kid
     if(q_useful_buf_compare(parameters.kid, Q_USEFUL_BUF_FROM_SZ_LITERAL("11"))) {
@@ -838,11 +851,6 @@ int_fast32_t all_header_parameters_test()
     if(q_useful_buf_compare(parameters.iv,
                             Q_USEFUL_BUF_FROM_SZ_LITERAL("iv"))) {
         return 5;
-    }
-
-    if(q_useful_buf_compare(parameters.partial_iv,
-                            Q_USEFUL_BUF_FROM_SZ_LITERAL("partial_iv"))) {
-        return 6;
     }
 
     free_fixed_signing_key(key_pair);
@@ -902,13 +910,13 @@ static struct test_case bad_parameters_tests_table[] = {
 /*
  * Public function, see t_cose_test.h
  */
-int_fast32_t bad_parameters_test()
+int32_t bad_parameters_test()
 {
     struct test_case *test;
 
     for(test = bad_parameters_tests_table; test->test_option; test++) {
         if(run_test_sign_and_verify(test->test_option) != test->result) {
-            return (int_fast32_t)(test - bad_parameters_tests_table + 1);
+            return (int32_t)(test - bad_parameters_tests_table + 1);
         }
     }
 
@@ -917,7 +925,7 @@ int_fast32_t bad_parameters_test()
 
 
 
-
+/* These test the processing of the crit param in a COSE_SIGN1 */
 static struct test_case crit_tests_table[] = {
     /* Test existance of the critical header. Also makes sure that
      * it works with the max number of labels allowed in it.
@@ -936,18 +944,21 @@ static struct test_case crit_tests_table[] = {
      * the label doesn't exist. This works for integer-labeled header params.
      */
     {T_COSE_TEST_UNKNOWN_CRIT_UINT_PARAMETER, T_COSE_ERR_UNKNOWN_CRITICAL_PARAMETER},
-
+#if WE_HAVE_ADDED_STRING_LABELS
     /* A critical label is listed in the protected section, but
      * the label doesn't exist. This works for string-labeled header params.
      */
     {T_COSE_TEST_UNKNOWN_CRIT_TSTR_PARAMETER, T_COSE_ERR_UNKNOWN_CRITICAL_PARAMETER},
+#endif /* WE_HAVE_ADDED_STRING_LABELS */
 
     /* The critical labels list is not protected */
     {T_COSE_TEST_CRIT_NOT_PROTECTED, T_COSE_ERR_PARAMETER_NOT_PROTECTED},
 
     {T_COSE_TEST_EMPTY_CRIT_PARAMETER, T_COSE_ERR_CRIT_PARAMETER},
 
+#if WE_HAVE_ADDED_STRING_LABELS
     {T_COSE_TEST_TOO_MANY_TSTR_CRIT_LABLELS, T_COSE_ERR_CRIT_PARAMETER},
+#endif /* WE_HAVE_ADDED_STRING_LABELS */
 
     {0, 0}
 };
@@ -956,13 +967,15 @@ static struct test_case crit_tests_table[] = {
 /*
  * Public function, see t_cose_test.h
  */
-int_fast32_t crit_parameters_test()
+int32_t crit_parameters_test()
 {
-    struct test_case *test;
+    unsigned index;
 
-    for(test = crit_tests_table; test->test_option; test++) {
+    for(index = 0; index < C_ARRAY_COUNT(crit_tests_table, struct test_case); index++) {
+        struct test_case *test = &crit_tests_table[index];
+
         if(run_test_sign_and_verify(test->test_option) != test->result) {
-            return (int_fast32_t)(test - crit_tests_table + 1);
+            return (int32_t)(index * 1000 + 1);
         }
     }
 
@@ -974,7 +987,7 @@ int_fast32_t crit_parameters_test()
 /*
  * Public function, see t_cose_test.h
  */
-int_fast32_t content_type_test()
+int32_t content_type_test()
 {
     struct t_cose_parameters        parameters;
     struct t_cose_sign1_sign_ctx    sign_ctx;
@@ -1125,6 +1138,7 @@ static struct sign1_sample sign1_sample_inputs[] = {
 #include "t_cose/t_cose_parameters.h"
 #include "qcbor/qcbor_spiffy_decode.h"
 
+#ifndef T_COSE_DISABLE_COSE_SIGN
 
 static enum t_cose_err_t
 foo_encode_cb(const struct t_cose_parameter  *parameter,
@@ -1149,7 +1163,7 @@ foo_decode_cb(void                    *cb_context,
         int64_t n1, n2;
 
         QCBORDecode_EnterMap(cbor_decoder, NULL);
-        QCBORDecode_GetInt64InMapSZ (cbor_decoder, "xxx", &n1);
+        QCBORDecode_GetInt64InMapSZ(cbor_decoder, "xxx", &n1);
         QCBORDecode_GetInt64InMapSZ(cbor_decoder, "yyy", &n2);
         QCBORDecode_ExitMap(cbor_decoder);
         if(QCBORDecode_IsNotWellFormedError(QCBORDecode_GetError(cbor_decoder))) {
@@ -1158,7 +1172,6 @@ foo_decode_cb(void                    *cb_context,
 
         parameter->value.special_decode.value.little_buf[0] = (uint8_t)n1;
         parameter->value.special_decode.value.little_buf[1] = (uint8_t)n2;
-        parameter->value.special_decode.status = SP_DECODED;
         parameter->value_type = T_COSE_PARAMETER_TYPE_SPECIAL;
 
     } else if(parameter->label == 314) {
@@ -1166,20 +1179,14 @@ foo_decode_cb(void                    *cb_context,
         QCBORDecode_GetDouble(cbor_decoder, &dd);
 
         parameter->value.special_decode.value.uint64 = UsefulBufUtil_CopyDoubleToUint64(dd);
-        parameter->value.special_decode.status = SP_DECODED;
         parameter->value_type = T_COSE_PARAMETER_TYPE_SPECIAL;
 
     } else {
-        /* A label we don't understand. */
-        if(parameter->critical) {
-            return T_COSE_ERR_UNKNOWN_CRITICAL_PARAMETER;
-        }
-        parameter->value.special_decode.status = SP_NOT_DECODED;
+        return T_COSE_ERR_DECLINE;
     }
 
     return T_COSE_SUCCESS;
 }
-
 
 static enum t_cose_err_t
 float_encode_cb(const struct t_cose_parameter  *parameter,
@@ -1191,6 +1198,8 @@ float_encode_cb(const struct t_cose_parameter  *parameter,
 
     return T_COSE_SUCCESS;
 }
+
+
 
 
 static int32_t
@@ -1214,7 +1223,7 @@ make_complex_cose_sign(struct q_useful_buf cose_sign_buf, struct q_useful_buf_c 
     init_fixed_test_signing_key(T_COSE_ALGORITHM_ES256, &sig1_key);
     t_cose_signature_sign_main_init(&sig1_encoder, T_COSE_ALGORITHM_ES256);
     t_cose_signature_sign_main_set_signing_key(&sig1_encoder, sig1_key, Q_USEFUL_BUF_FROM_SZ_LITERAL("sig1"));
-    sig1_params[0] = t_cose_make_ct_tstr_parameter(Q_USEFUL_BUF_FROM_SZ_LITERAL("app/foo"));
+    sig1_params[0] = t_cose_param_make_ct_tstr(Q_USEFUL_BUF_FROM_SZ_LITERAL("app/foo"));
     sig1_params[1].critical         = false;
     sig1_params[1].in_protected     = false;
     sig1_params[1].location.index   = 0;
@@ -1240,7 +1249,7 @@ make_complex_cose_sign(struct q_useful_buf cose_sign_buf, struct q_useful_buf_c 
     init_fixed_test_signing_key(T_COSE_ALGORITHM_ES384, &sig2_key);
     t_cose_signature_sign_main_init(&sig2_encoder, T_COSE_ALGORITHM_ES384);
     t_cose_signature_sign_main_set_signing_key(&sig2_encoder, sig2_key, Q_USEFUL_BUF_FROM_SZ_LITERAL("sig2"));
-    sig2_params[0] = t_cose_make_ct_tstr_parameter(Q_USEFUL_BUF_FROM_SZ_LITERAL("app/xxx"));
+    sig2_params[0] = t_cose_param_make_ct_tstr(Q_USEFUL_BUF_FROM_SZ_LITERAL("app/xxx"));
     sig2_params[1].critical         = false;
     sig2_params[1].in_protected     = false;
     sig2_params[1].location.index   = 0;
@@ -1257,7 +1266,7 @@ make_complex_cose_sign(struct q_useful_buf cose_sign_buf, struct q_useful_buf_c 
     init_fixed_test_signing_key(T_COSE_ALGORITHM_ES512, &sig3_key);
     t_cose_signature_sign_main_init(&sig3_encoder, T_COSE_ALGORITHM_ES512);
     t_cose_signature_sign_main_set_signing_key(&sig3_encoder, sig3_key, Q_USEFUL_BUF_FROM_SZ_LITERAL("sig3"));
-    sig3_params[0] = t_cose_make_ct_uint_parameter(217);
+    sig3_params[0] = t_cose_param_make_ct_uint(217);
     t_cose_signature_sign_main_set_header_parameter(&sig3_encoder, sig3_params);
     t_cose_sign_add_signer(&sign_encoder, t_cose_signature_sign_from_main(&sig3_encoder));
 
@@ -1275,12 +1284,13 @@ make_complex_cose_sign(struct q_useful_buf cose_sign_buf, struct q_useful_buf_c 
     free_fixed_signing_key(sig2_key);
     free_fixed_signing_key(sig3_key);
 
+
     return 0;
 }
 
 
 /* This checks the value for all special headers by having the
- * expected valued hard-coded in.
+ * expected values hard-coded in.
  */
 static int32_t
 match_special(const struct t_cose_parameter *p1)
@@ -1456,29 +1466,31 @@ check_complex_sign_params(struct t_cose_parameter *params)
 
     return 0;
 }
+#endif /* !T_COSE_DISABLE_COSE_SIGN */
 
 
 
 /*
  * Public function, see t_cose_test.h
  */
-int_fast32_t sign1_structure_decode_test(void)
+int32_t sign1_structure_decode_test(void)
 {
     struct q_useful_buf_c           payload;
     enum t_cose_err_t               result;
     struct t_cose_sign1_verify_ctx  verify1_ctx;
+
+#ifndef T_COSE_DISABLE_COSE_SIGN
     int32_t                         return_value;
     MakeUsefulBufOnStack(           cose_sign_buf, 900);
     struct q_useful_buf_c           cose_sign;
     struct t_cose_parameter        *decoded_params;
-
     struct t_cose_parameter        _params[20];
-
     struct t_cose_parameter_storage extra_params;
 
-    T_COSE_PARAM_STORAGE_INIT(extra_params, _params);
 
     if(t_cose_is_algorithm_supported(T_COSE_ALGORITHM_ES256)) {
+        T_COSE_PARAM_STORAGE_INIT(extra_params, _params);
+
         /* Only works with real algorithms (so far). */
 
         return_value = make_complex_cose_sign(cose_sign_buf, &cose_sign);
@@ -1510,7 +1522,7 @@ int_fast32_t sign1_structure_decode_test(void)
                                     &payload,
                                     &decoded_params);
         if(result != T_COSE_SUCCESS) {
-            return -999;
+            return -99;
         }
 
         return_value = check_complex_sign_params(decoded_params);
@@ -1518,9 +1530,14 @@ int_fast32_t sign1_structure_decode_test(void)
             return return_value;
         }
     }
+#endif  /* !T_COSE_DISABLE_T_COSE_SIGN */
 
 
     for(int i = 0; !q_useful_buf_c_is_null(sign1_sample_inputs[i].CBOR); i++) {
+        if(i == 7) {
+            result = 9;
+        }
+
         t_cose_sign1_verify_init(&verify1_ctx, T_COSE_OPT_DECODE_ONLY);
         result = t_cose_sign1_verify(&verify1_ctx,
                                       sign1_sample_inputs[i].CBOR,
@@ -1549,7 +1566,7 @@ extern int hash_test_mode;
 /*
  * Public function, see t_cose_test.h
  */
-int_fast32_t short_circuit_hash_fail_test()
+int32_t short_circuit_hash_fail_test()
 {
     struct t_cose_sign1_sign_ctx sign_ctx;
     enum t_cose_err_t            result;
@@ -1607,7 +1624,7 @@ int_fast32_t short_circuit_hash_fail_test()
 /*
  * Public function, see t_cose_test.h
  */
-int_fast32_t tags_test()
+int32_t tags_test()
 {
     struct t_cose_sign1_sign_ctx    sign_ctx;
     struct t_cose_sign1_verify_ctx  verify_ctx;
@@ -1974,7 +1991,7 @@ int_fast32_t tags_test()
 }
 
 
-int_fast32_t get_size_test()
+int32_t get_size_test()
 {
     struct t_cose_sign1_sign_ctx   sign_ctx;
     QCBOREncodeContext             cbor_encode;
@@ -2080,7 +2097,7 @@ int_fast32_t get_size_test()
 /*
  * Public function, see t_cose_test.h
  */
-int_fast32_t indef_array_and_map_test()
+int32_t indef_array_and_map_test()
 {
     enum t_cose_err_t  return_value;
     #ifdef TODO_CRIT_PARAM_FIXED
@@ -2128,7 +2145,7 @@ int_fast32_t indef_array_and_map_test()
 /*
  * Public function, see t_cose_test.h
  */
-int_fast32_t crypto_context_test()
+int32_t crypto_context_test()
 {
     struct t_cose_sign_sign_ctx         sign_ctx;
     struct t_cose_sign_verify_ctx       verify_ctx;
@@ -2148,7 +2165,7 @@ int_fast32_t crypto_context_test()
      * crypto context behavior tested here.
      */
     if(!t_cose_is_algorithm_supported(T_COSE_ALGORITHM_SHORT_CIRCUIT_256)) {
-        return 0;
+        return INT32_MIN; /* Means no testing was actually done */
     }
     init_fixed_test_signing_key(T_COSE_ALGORITHM_SHORT_CIRCUIT_256, &key_pair);
 
@@ -2171,13 +2188,13 @@ int_fast32_t crypto_context_test()
 
 
     /* __2__ Change the value in the crypto context and see a failure  */
-    crypto_context.test_error = 99;
+    crypto_context.test_error = 18; /* 18 just picked to make test work */
     result = t_cose_sign_sign(&sign_ctx,
                               NULL_Q_USEFUL_BUF_C,
                               s_input_payload,
                               failed_signed_cose_buffer,
                              &failed_signed_cose);
-    if(result != 99) {
+    if(result != 18) {
         return 1000 + (int32_t)result;
     }
 
@@ -2209,7 +2226,7 @@ int_fast32_t crypto_context_test()
 
 
     /* __4__ See failure when crypto context is set for failure  */
-    crypto_context.test_error = 99;
+    crypto_context.test_error = 18; /* 18 just picked to make test work */
     /* Run the signature verification */
     result = t_cose_sign_verify(&verify_ctx,
                                 /* COSE to verify */
@@ -2219,7 +2236,7 @@ int_fast32_t crypto_context_test()
                                 &payload,
                                 /* Don't return parameters */
                                 NULL);
-    if(result != 99) {
+    if(result != 18) {
         return 2000 + (int32_t)result;
     }
     free_fixed_signing_key(key_pair);

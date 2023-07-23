@@ -1,5 +1,5 @@
 /**
- * \file t_cose_recipient_enc_hpke.c
+ * \file t_cose_recipient_enc.h
  *
  * Copyright (c) 2022, Arm Limited. All rights reserved.
  * Copyright (c) 2023, Laurence Lundblade. All rights reserved.
@@ -43,9 +43,10 @@ struct t_cose_recipient_enc;
  * \retval Error messages otherwise.
  */
 typedef enum t_cose_err_t
-t_cose_create_recipient_cb(struct t_cose_recipient_enc  *context,
-                           struct q_useful_buf_c         cek,
-                           QCBOREncodeContext           *cbor_encoder);
+t_cose_create_recipient_cb(struct t_cose_recipient_enc     *context,
+                           struct q_useful_buf_c            cek,
+                           const struct t_cose_alg_and_bits ce_alg,
+                           QCBOREncodeContext              *cbor_encoder);
 
 
 /**

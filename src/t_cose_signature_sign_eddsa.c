@@ -2,6 +2,8 @@
  * t_cose_signature_sign_eddsa.c
  *
  * Copyright (c) 2022, Laurence Lundblade. All rights reserved.
+ * Copyright (c) 2023, Arm Limited. All rights reserved.
+ *
  * Created by Laurence Lundblade on 11/15/22.
  *
  * SPDX-License-Identifier: BSD-3-Clause
@@ -17,7 +19,6 @@
 #include "t_cose_crypto.h"
 #include "t_cose_util.h"
 
-#ifndef T_COSE_DISABLE_EDDSA
 
 
 /** This is an implementation of \ref t_cose_signature_sign_headers_cb */
@@ -29,9 +30,9 @@ t_cose_signature_sign_headers_eddsa_cb(struct t_cose_signature_sign   *me_x,
     struct t_cose_signature_sign_eddsa *me =
                                     (struct t_cose_signature_sign_eddsa *)me_x;
 
-    me->local_params[0]  = t_cose_make_alg_id_parameter(T_COSE_ALGORITHM_EDDSA);
+    me->local_params[0]  = t_cose_param_make_alg_id(T_COSE_ALGORITHM_EDDSA);
     if(!q_useful_buf_c_is_null(me->kid)) {
-        me->local_params[1] = t_cose_make_kid_parameter(me->kid);
+        me->local_params[1] = t_cose_param_make_kid(me->kid);
         me->local_params[0].next = &me->local_params[1];
     }
 
@@ -72,6 +73,13 @@ t_cose_signature_sign1_eddsa_cb(struct t_cose_signature_sign    *me_x,
       */
      me->auxiliary_buffer_size = tbs.len;
 
+    /* Check encoder state before QCBOREncode_OpenBytes() for sensible
+     * error reporting. */
+    return_value = qcbor_encode_error_to_t_cose_error(qcbor_encoder);
+    if(return_value != T_COSE_SUCCESS) {
+        goto Done;
+    }
+
      QCBOREncode_OpenBytes(qcbor_encoder, &buffer_for_signature);
 
 
@@ -109,6 +117,7 @@ t_cose_signature_sign_eddsa_cb(struct t_cose_signature_sign  *me_x,
                                struct t_cose_sign_inputs     *sign_inputs,
                                QCBOREncodeContext            *qcbor_encoder)
 {
+#ifndef T_COSE_DISABLE_COSE_SIGN
     struct t_cose_signature_sign_eddsa *me =
                                      (struct t_cose_signature_sign_eddsa *)me_x;
     enum t_cose_err_t           return_value;
@@ -117,8 +126,8 @@ t_cose_signature_sign_eddsa_cb(struct t_cose_signature_sign  *me_x,
     QCBOREncode_OpenArray(qcbor_encoder);
 
     t_cose_signature_sign_headers_eddsa_cb(me_x, &parameters);
-    t_cose_parameter_list_append(parameters, me->added_signer_params);
-    t_cose_encode_headers(qcbor_encoder,
+    t_cose_params_append(&parameters, me->added_signer_params);
+    t_cose_headers_encode(qcbor_encoder,
                           parameters,
                           &sign_inputs->sign_protected);
 
@@ -129,6 +138,15 @@ t_cose_signature_sign_eddsa_cb(struct t_cose_signature_sign  *me_x,
     QCBOREncode_CloseArray(qcbor_encoder);
 
     return return_value;
+
+#else /* !T_COSE_DISABLE_COSE_SIGN */
+
+    (void)me_x;
+    (void)sign_inputs;
+    (void)qcbor_encoder;
+
+    return T_COSE_ERR_UNSUPPORTED;
+#endif /* !T_COSE_DISABLE_COSE_SIGN */
 }
 
 
@@ -136,13 +154,8 @@ void
 t_cose_signature_sign_eddsa_init(struct t_cose_signature_sign_eddsa *me)
 {
     memset(me, 0, sizeof(*me));
+    me->s.rs.ident   = RS_IDENT(TYPE_RS_SIGNER, 'E');
     me->s.sign_cb    = t_cose_signature_sign_eddsa_cb;
     me->s.sign1_cb   = t_cose_signature_sign1_eddsa_cb;
     me->s.headers_cb = t_cose_signature_sign_headers_eddsa_cb;
 }
-
-#else /* !T_COSE_DISABLE_EDDSA */
-
-void t_cose_signature_sign_eddsa_placeholder(void) {}
-
-#endif /* !T_COSE_DISABLE_EDDSA */

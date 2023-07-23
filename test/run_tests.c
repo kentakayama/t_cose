@@ -2,7 +2,7 @@
  * run_tests.c -- test aggregator and results reporting
  *
  * Copyright (c) 2018-2023, Laurence Lundblade. All rights reserved.
- * Copyright (c) 2022 Arm Limited. All rights reserved.
+ * Copyright (c) 2022-2023, Arm Limited. All rights reserved.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  *
@@ -50,14 +50,16 @@ static test_entry s_tests[] = {
 #endif
     TEST_ENTRY(hkdf_test),
 
-#ifndef T_COSE_DISABLE_SIGN1
+#ifndef T_COSE_USE_B_CON_SHA256 /* test crypto doesn't support ECDH */
+    TEST_ENTRY(ecdh_test),
+    TEST_ENTRY(dec_fixed),
+#endif /* T_COSE_USE_B_CON_SHA256 */
+
     TEST_ENTRY(sign1_structure_decode_test),
-#endif /* T_COSE_DISABLE_SIGN1 */
 
     TEST_ENTRY(crypto_context_test),
 
 #ifndef T_COSE_DISABLE_SIGN_VERIFY_TESTS
-#ifndef T_COSE_DISABLE_SIGN1
     /* Many tests can be run without a crypto library integration and
      * provide good test coverage of everything but the signing and
      * verification. These tests can't be run with signing and
@@ -70,24 +72,24 @@ static test_entry s_tests[] = {
     TEST_ENTRY(sign_verify_known_good_test),
     TEST_ENTRY(sign_verify_unsupported_test),
     TEST_ENTRY(sign_verify_bad_auxiliary_buffer),
-    
+
+#ifndef T_COSE_DISABLE_COSE_SIGN
+    TEST_ENTRY(verify_multi_test),
+    TEST_ENTRY(verify_multi_test),
+    TEST_ENTRY(restart_test_2_step),
 #endif /* T_COSE_DISABLE_SIGN1 */
 
-#ifndef T_COSE_DISABLE_MAC0
     // TODO: should these really be conditional on T_COSE_DISABLE_SIGN_VERIFY_TESTS
-    TEST_ENTRY(compute_validate_mac_basic_test),
-    TEST_ENTRY(compute_validate_mac_sig_fail_test),
-    TEST_ENTRY(compute_validate_get_size_mac_test),
-    TEST_ENTRY(compute_validate_detached_content_mac_sig_fail_test),
-    TEST_ENTRY(compute_validate_get_size_detached_content_mac_test),
-#endif /* T_COSE_DISABLE_MAC0 */
-
-    TEST_ENTRY(sign_verify_multi),
 
 #endif /* T_COSE_DISABLE_SIGN_VERIFY_TESTS */
 
+    TEST_ENTRY(compute_validate_mac_basic_test),
+    TEST_ENTRY(compute_validate_mac_fail_test),
+    TEST_ENTRY(compute_validate_get_size_mac_test),
+    TEST_ENTRY(compute_validate_detached_content_mac_fail_test),
+    TEST_ENTRY(compute_validate_get_size_detached_content_mac_test),
+
 #ifndef T_COSE_DISABLE_SHORT_CIRCUIT_SIGN
-#ifndef T_COSE_DISABLE_SIGN1
     /* These tests can't run if short-circuit signatures are disabled.
      * The most critical ones are replicated in the group of tests
      * that require a real crypto library. Typically short-circuit
@@ -95,9 +97,8 @@ static test_entry s_tests[] = {
      * tests are typically always run.
      */
     TEST_ENTRY(bad_parameters_test),
-#ifdef TODO_CRIT_PARAM_FIXED
     TEST_ENTRY(crit_parameters_test),
-#endif /* TODO_CRIT_PARAM_FIXED */
+
 #ifndef T_COSE_DISABLE_CONTENT_TYPE
     TEST_ENTRY(content_type_test),
 #endif /* !T_COSE_DISABLE_CONTENT_TYPE */
@@ -118,10 +119,10 @@ static test_entry s_tests[] = {
 #ifdef T_COSE_ENABLE_HASH_FAIL_TEST
     TEST_ENTRY(short_circuit_hash_fail_test),
 #endif /* T_COSE_DISABLE_HASH_FAIL_TEST */
-#endif /* T_COSE_DISABLE_SIGN1 */
 #endif /* T_COSE_DISABLE_SHORT_CIRCUIT_SIGN */
 
     TEST_ENTRY(param_test),
+    TEST_ENTRY(common_params_test),
     TEST_ENTRY(base_encrypt_decrypt_test)
 
 };
@@ -215,6 +216,13 @@ int RunTestsTCose(const char    *szTestNames[],
         }
 
         int32_t nTestResult = (int32_t)(t->test_fun)();
+
+        if(nTestResult == INT32_MIN) {
+            /* INT32_MIN means tests didn't do any testing. It is typically
+             * returned when the algorithms needed for a test aren't
+             * available when checked by t_cose_is_algorithm_supported(). */
+            continue;
+        }
         nTestsRun++;
         if(pfOutput) {
             (*pfOutput)(t->szTestName, poutCtx, 0);
@@ -232,6 +240,9 @@ int RunTestsTCose(const char    *szTestNames[],
                 (*pfOutput)( " PASSED", poutCtx, 1);
             }
         }
+        /* TODO using special error code to indicate if a test
+         * did not actually run due to lack of algorithm support?
+         */
     }
 
     if(pNumTestsRun) {
@@ -298,8 +309,8 @@ static void PrintSize(const char    *szWhat,
 #include "t_cose/t_cose_recipient_enc_keywrap.h"
 #include "t_cose/t_cose_recipient_dec_keywrap.h"
 
-#include "t_cose/t_cose_recipient_enc_hpke.h"
-#include "t_cose/t_cose_recipient_dec_hpke.h"
+#include "t_cose/t_cose_recipient_enc_esdh.h"
+#include "t_cose/t_cose_recipient_dec_esdh.h"
 
 
 /*
@@ -369,11 +380,11 @@ void PrintSizesTCose(OutputStringCB pfOutput, void *pOutCtx)
               (uint32_t)sizeof(struct t_cose_recipient_dec_keywrap),
               pfOutput, pOutCtx);
 
-    PrintSize("sizeof(struct t_cose_recipient_enc_hpke)",
-              (uint32_t)sizeof(struct t_cose_recipient_enc_keywrap),
+    PrintSize("sizeof(struct t_cose_recipient_enc_esdh)",
+              (uint32_t)sizeof(struct t_cose_recipient_enc_esdh),
               pfOutput, pOutCtx);
-    PrintSize("sizeof(struct t_cose_recipient_dec_hpke)",
-              (uint32_t)sizeof(struct t_cose_recipient_dec_keywrap),
+    PrintSize("sizeof(struct t_cose_recipient_dec_esdh)",
+              (uint32_t)sizeof(struct t_cose_recipient_dec_esdh),
               pfOutput, pOutCtx);
 
     PrintSize("sizeof(struct t_cose_crypto_hash)",

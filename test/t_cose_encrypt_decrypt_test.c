@@ -10,15 +10,11 @@
 
 
 #include "t_cose_encrypt_decrypt_test.h"
-
 #include "t_cose/t_cose_encrypt_dec.h"
 #include "t_cose/t_cose_encrypt_enc.h"
+#include "t_cose/t_cose_recipient_dec_esdh.h"
 
-#ifndef T_COSE_DISABLE_HPKE
-#include "t_cose/t_cose_recipient_enc_hpke.h"
-#include "t_cose/t_cose_recipient_dec_hpke.h"
-#include "init_keys.h"
-#endif
+
 
 #define PAYLOAD  "This is the payload"
 #define TEST_KID "fixed_test_key_id"
@@ -176,7 +172,7 @@ int32_t encrypt0_enc_dec(int32_t cose_algorithm_id)
 
     t_cose_encrypt_set_cek(&enc_context, cek);
 
-    ps[0] = t_cose_make_ct_tstr_parameter(Q_USEFUL_BUF_FROM_SZ_LITERAL("text/plain"));
+    ps[0] = t_cose_param_make_ct_tstr(Q_USEFUL_BUF_FROM_SZ_LITERAL("text/plain"));
     ps[0].next = &ps[1];
     ps[1].value_type = T_COSE_PARAMETER_TYPE_BYTE_STRING;
     ps[1].value.string = Q_USEFUL_BUF_FROM_SZ_LITERAL("xxxxxxxxxx");
@@ -283,106 +279,7 @@ Done2:
     return return_value;
 }
 
-#ifndef T_COSE_DISABLE_HPKE
-int32_t
-encrypt_enc_dec(int32_t                cose_algorithm_id,
-                uint16_t               kem_id,
-                uint16_t               kdf_id,
-                uint16_t               aead_id,
-                struct q_useful_buf_c  kid,
-                struct t_cose_key      skR,
-                struct t_cose_key      pkR,
-                struct q_useful_buf_c  payload,
-                struct q_useful_buf_c  aad)
-{
-    struct t_cose_encrypt_enc        enc_ctx;
-    enum t_cose_err_t                result;
-    int32_t                          return_value=0;
-    struct t_cose_recipient_enc_hpke recipient;
-    struct q_useful_buf_c            cose_encrypted_message;
-    struct q_useful_buf_c            decrypted_plain_text;
 
-    Q_USEFUL_BUF_MAKE_STACK_UB  (    cose_encrypt_message_buffer, 200);
-    Q_USEFUL_BUF_MAKE_STACK_UB  (    decrypted_plaintext_buffer, 100);
-    struct t_cose_recipient_dec_hpke dec_recipient;
-    struct t_cose_encrypt_dec_ctx    dec_ctx;
-
-    /* Initialize the encryption context telling it we want
-     * a COSE_Encrypt (not a COSE_Encrypt0) because we're doing HPKE with a
-     * COSE_Recpipient. Also tell it the AEAD algorithm for the
-     * body of the message.
-     */
-    t_cose_encrypt_enc_init(&enc_ctx,
-                            T_COSE_OPT_MESSAGE_TYPE_ENCRYPT,
-                            cose_algorithm_id);
-
-
-    /* Create the recipient object telling it the algorithm and the public key
-     * for the COSE_Recipient it's going to make. Then give that object
-     * to the main encryption context. (Only one recipient is set here, but
-     * there could be more)
-     */
-    t_cose_recipient_enc_hpke_init(&recipient,
-                                    kem_id,   /* kem id */
-                                    kdf_id,   /* kdf id */
-                                    aead_id); /* aead id */
-
-    t_cose_recipient_enc_hpke_set_key(&recipient,
-                                       pkR,
-                                       kid);
-    t_cose_encrypt_add_recipient(&enc_ctx,
-                                 (struct t_cose_recipient_enc *)&recipient);
-
-
-    /* Now do the actual encryption */
-    result = t_cose_encrypt_enc(&enc_ctx, /* in: encryption context */
-                                 payload, /* in: payload to encrypt */
-                                 aad,
-                                 cose_encrypt_message_buffer, /* in: buffer for COSE_Encrypt */
-                                 &cose_encrypted_message); /* out: COSE_Encrypt */
-
-    if (result != T_COSE_SUCCESS) {
-        return_value = 2000 + (int32_t)result;
-        goto Done;
-    }
-
-
-    /* Set up the decryption context, telling it what type of
-     * message to expect if there's no tag (that part isn't quite implemented right yet anyway).
-     */
-    t_cose_encrypt_dec_init(&dec_ctx, T_COSE_OPT_MESSAGE_TYPE_ENCRYPT);
-
-
-    /* Set up the recipient object with the key material. We happen to know
-     * what the algorithm and key are in advance so we don't have to
-     * decode the parameters first to figure that out (not that this part is
-     * working yet). */
-    t_cose_recipient_dec_hpke_init(&dec_recipient);
-    t_cose_recipient_dec_hpke_set_skr(&dec_recipient,
-                                      skR,
-                                      kid);
-    t_cose_encrypt_dec_add_recipient(&dec_ctx, (struct t_cose_recipient_dec *)&dec_recipient);
-
-    result = t_cose_encrypt_dec(&dec_ctx,
-                                cose_encrypted_message, /* in: the COSE_Encrypt message */
-                                aad,
-                                decrypted_plaintext_buffer,
-                                &decrypted_plain_text,
-                                NULL);
-
-    if (result != T_COSE_SUCCESS) {
-        return_value = 3000 + (int32_t)result;
-        goto Done;
-    }
-
-    if(q_useful_buf_compare(decrypted_plain_text, payload)) {
-        return_value = 1;
-        goto Done;
-    }
-Done:
-    return (int32_t)return_value;
-}
-#endif /* T_COSE_DISABLE_HPKE */
 
 
 int32_t base_encrypt_decrypt_test(void)
@@ -408,40 +305,85 @@ int32_t base_encrypt_decrypt_test(void)
 //        return rv;
 //    }
 
-#ifndef T_COSE_DISABLE_HPKE
-    /* Create a key pair.  This is a fixed test key pair. The creation
-     * of this key pair is crypto-library dependent because t_cose_key
-     * is crypto-library dependent. See t_cose_key.h and the examples
-     * to understand key-pair creation better. */
-    enum t_cose_err_t result;
-    struct t_cose_key skR;
-    struct t_cose_key pkR;
 
-    /* Load public / private recipient key */
-    result = init_fixed_test_encryption_key(T_COSE_ELLIPTIC_CURVE_P_256,
-                                            &pkR, /* out: public key to be used for encryption */
-                                            &skR); /* out: corresponding private key for decryption */
-    if(result != T_COSE_SUCCESS) {
-       return -7; /* return some error value */
-    }
-
-    rv = encrypt_enc_dec(T_COSE_ALGORITHM_A128GCM,
-                         T_COSE_HPKE_KEM_ID_P256,
-                         T_COSE_HPKE_KDF_ID_HKDF_SHA256,
-                         T_COSE_HPKE_AEAD_ID_AES_GCM_128,
-                         Q_USEFUL_BUF_FROM_SZ_LITERAL(TEST_KID),
-                         skR,
-                         pkR,
-                         Q_USEFUL_BUF_FROM_SZ_LITERAL(PAYLOAD),
-                         NULL_Q_USEFUL_BUF_C);
-    if(rv) {
-        return rv;
-    }
-    free_fixed_test_encryption_key(skR);
-    free_fixed_test_encryption_key(pkR);
-#endif /* T_COSE_DISABLE_HPKE */
     return 0;
 
 }
 
 
+/* This is just a patched together example for the
+ * purpose of verifying decoding. It will not
+ * successully decrypt. */
+unsigned char esdh_encrypt_sample[] = {
+  0xd8, 0x60, 0x84, 0x43, 0xa1, 0x01, 0x01, 0xa1,
+  0x05, 0x4c, 0xc9, 0xcf, 0x4d, 0xf2, 0xfe, 0x6c,
+  0x63, 0x2b, 0xf7, 0x88, 0x64, 0x13, 0x58, 0x24,
+  0x7a, 0xdb, 0xe2, 0x70, 0x9c, 0xa8, 0x18, 0xfb,
+  0x41, 0x5f, 0x1e, 0x5d, 0xf6, 0x6f, 0x4e, 0x1a,
+  0x51, 0x05, 0x3b, 0xa6, 0xd6, 0x5a, 0x1a, 0x0c,
+  0x52, 0xa3, 0x57, 0xda, 0x7a, 0x64, 0x4b, 0x80,
+  0x70, 0xa1, 0x51, 0xb0, 0x81, 0x83, 0x44, 0xa1,
+  0x01, 0x38, 0x1c, 0xa2, 0x20, 0xa4, 0x01, 0x02,
+  0x20, 0x03, 0x21, 0x58, 0x42, 0x00, 0x43, 0xb1,
+  0x26, 0x69, 0xac, 0xac, 0x3f, 0xd2, 0x78, 0x98,
+  0xff, 0xba, 0x0b, 0xcd, 0x2e, 0x6c, 0x36, 0x6d,
+  0x53, 0xbc, 0x4d, 0xb7, 0x1f, 0x90, 0x9a, 0x75,
+  0x93, 0x04, 0xac, 0xfb, 0x5e, 0x18, 0xcd, 0xc7,
+  0xba, 0x0b, 0x13, 0xff, 0x8c, 0x76, 0x36, 0x27,
+  0x1a, 0x69, 0x24, 0xb1, 0xac, 0x63, 0xc0, 0x26,
+  0x88, 0x07, 0x5b, 0x55, 0xef, 0x2d, 0x61, 0x35,
+  0x74, 0xe7, 0xdc, 0x24, 0x2f, 0x79, 0xc3, 0x22,
+  0xf5, 0x04, 0x58, 0x1e, 0x62, 0x69, 0x6c, 0x62,
+  0x6f, 0x2e, 0x62, 0x61, 0x67, 0x67, 0x69, 0x6e,
+  0x73, 0x40, 0x68, 0x6f, 0x62, 0x62, 0x69, 0x74,
+  0x6f, 0x6e, 0x2e, 0x65, 0x78, 0x61, 0x6d, 0x70,
+  0x6c, 0x65, 0x58, 0x28, 0x33, 0x9b, 0xc4, 0xf7,
+  0x99, 0x84, 0xcd, 0xc6, 0xb3, 0xe6, 0xce, 0x5f,
+  0x31, 0x5a, 0x4c, 0x7d, 0x2b, 0x0a, 0xc4, 0x66,
+  0xfc, 0xea, 0x69, 0xe8, 0xc0, 0x7d, 0xfb, 0xca,
+  0x5b, 0xb1, 0xf6, 0x61, 0xbc, 0x5f, 0x8e, 0x0d,
+  0xf9, 0xe3, 0xef, 0xf5
+};
+
+
+
+#include "init_keys.h"
+
+#ifndef T_COSE_USE_B_CON_SHA256 /* test crypto doesn't support ECDH */
+
+int32_t dec_fixed(void)
+{
+    struct t_cose_encrypt_dec_ctx dec_ctx;
+    MakeUsefulBufOnStack(plain_text_buf, 300);
+    struct q_useful_buf_c decrypted_payload;
+    enum t_cose_err_t t_cose_err;
+    struct t_cose_key private_key;
+    struct t_cose_key public_key;
+    struct t_cose_recipient_dec_esdh esdh;
+
+
+    t_cose_encrypt_dec_init(&dec_ctx, CBOR_TAG_COSE_ENCRYPT);
+
+    t_cose_recipient_dec_esdh_init(&esdh);
+    init_fixed_test_ec_encryption_key(T_COSE_ELLIPTIC_CURVE_P_521,
+                                      &private_key,
+                                      &public_key);
+    t_cose_recipient_dec_esdh_set_key(&esdh,
+                                      private_key,
+                                      NULL_Q_USEFUL_BUF_C);
+
+
+    t_cose_encrypt_dec_add_recipient(&dec_ctx, (struct t_cose_recipient_dec *)&esdh);
+
+    t_cose_err = t_cose_encrypt_dec(&dec_ctx,
+                                    UsefulBuf_FROM_BYTE_ARRAY_LITERAL(esdh_encrypt_sample),
+                                    NULL_Q_USEFUL_BUF_C,
+                                    plain_text_buf,
+                                    &decrypted_payload,
+                                    NULL);
+
+    (void)t_cose_err;
+
+    return 0;
+}
+#endif /* !T_COSE_USE_B_CON_SHA256 */
