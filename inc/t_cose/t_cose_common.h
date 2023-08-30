@@ -2,7 +2,7 @@
  * t_cose_common.h
  *
  * Copyright 2019-2023, Laurence Lundblade
- * Copyright (c) 2020-2022, Arm Limited. All rights reserved.
+ * Copyright (c) 2020-2023, Arm Limited. All rights reserved.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  *
@@ -17,7 +17,6 @@
 #include <stdbool.h>
 #include "t_cose/q_useful_buf.h" /* For t_cose_key and t_cose_sign_inputs */
 
-//#define T_COSE_DISABLE_EDDSA
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,7 +25,7 @@ extern "C" {
 
 /*
  * API Design Overview
- * 
+ *
  * t_cose is made up of a collection of objects (in the
  * object-oriented programming sense) that correspond to the main
  * objects defined in CDDL by the COSE standard (RFC 9052). These
@@ -83,7 +82,7 @@ extern "C" {
  * checked by actually designing and implementing it). These are not
  * needed for COSE_Mac0.
  *
- * 
+ *
  * COSE_Message
  *
  * t_cose_message_create() and t_cose_message_decode handle
@@ -158,8 +157,8 @@ extern "C" {
  * database look ups, use of certificates, counter signatures
  * and such, all without changing the source or even object
  * code of the core t_cose library.
- * 
- * COSE_Key 
+ *
+ * COSE_Key
  *
  * Some formats of COSE_recipient have parameters that are in the
  * COSE_key format. It would be useful to have some library code to
@@ -168,7 +167,7 @@ extern "C" {
  */
 
 
-  
+
 /**
  * \file t_cose_common.h
  *
@@ -208,10 +207,15 @@ extern "C" {
 
 
 /**
- * This indicates this is t_cose 2.x, not 1.x. It should be forward compatible
- * with 1.x, but this is available in case it is not.
+ * Semantic versioning for t_cose x.y.z. Note that these were not defined
+ * for some releases of t_cose 1.x so !defined(T_COSE_VERSION_MAJOR)
+ * indicates t_cose 1.x.
  */
-#define T_COSE_2
+#define T_COSE_VERSION_MAJOR 2
+#define T_COSE_VERSION_MINOR 0
+#define T_COSE_VERSION_PATCH 0
+
+
 
 
 /* Definition of algorithm IDs is moved to t_cose_standard_constants.h */
@@ -220,21 +224,30 @@ extern "C" {
 /* Definition of struct t_cose_key is moved to t_cose_key.h */
 
 
+/**
+ * The size of the output of SHA-256.
+ *
+ * (It is safe to define these independently here as they are
+ * well-known and fixed. There is no need to reference
+ * platform-specific headers and incur messy dependence.)
+ */
+#define T_COSE_CRYPTO_SHA256_SIZE 32
+
+/**
+ * The size of the output of SHA-384 in bytes.
+ */
+#define T_COSE_CRYPTO_SHA384_SIZE 48
+
+/**
+ * The size of the output of SHA-512 in bytes.
+ */
+#define T_COSE_CRYPTO_SHA512_SIZE 64
+
 // TODO: this may not belong in common.h
 enum t_cose_key_usage_flags {
     T_COSE_KEY_USAGE_FLAG_NONE = 0,
     T_COSE_KEY_USAGE_FLAG_DECRYPT = 1,
     T_COSE_KEY_USAGE_FLAG_ENCRYPT = 2
-};
-
-// TODO: this probably doesn't belong in common.h because it is HPKE-specific
-/*!
- * \brief HPKE ciphersuite
- */
-struct t_cose_crypto_hpke_suite_t {
-    uint16_t    kem_id;  // Key Encryption Method id
-    uint16_t    kdf_id;  // Key Derivation Function id
-    uint16_t    aead_id; // Authenticated Encryption with Associated Data id
 };
 
 
@@ -252,8 +265,13 @@ struct t_cose_crypto_hpke_suite_t {
  */
 #define T_COSE_MAC0_MAX_SIZE_PROTECTED_PARAMETERS (1 + 1 + 5 + 9)
 
-/* Six: an alg id, a kid, an iv, a content type, one custom, crit list */
-#define T_COSE_NUM_VERIFY_DECODE_HEADERS 6
+/* Six: an alg id, a kid, an iv, a content type, one custom, crit list
+ * or: 2 alg IDs, an IV, a kid, a supp_pub_info, one custom. If
+ * this is not enough use t_cose_encrypt_add_param_storage() or
+ * t_cose_sign_add_param_storage(). This is for the total of
+ * all headers in the main body and in recipient and signers.
+ */
+#define T_COSE_NUM_DECODE_HEADERS 6
 
 
 /**
@@ -320,7 +338,8 @@ enum t_cose_err_t {
 
     /** Signature verification or data authentication failed. For
      * example, the cryptographic operations completed successfully
-     * but hash wasn't as expected. */
+     * but hash wasn't as expected.
+     * TODO: separate these? Seems important to provide info about where this failure occured (key wrap, AEAD, ECDSA, MAC...*/
     T_COSE_ERR_SIG_VERIFY = 13,
     T_COSE_ERR_DATA_AUTH_FAILED = 13,
 
@@ -371,7 +390,7 @@ enum t_cose_err_t {
     T_COSE_ERR_TOO_SMALL = 25,
 
     /** More than \ref T_COSE_MAX_CRITICAL_PARAMS parameters
-     * listed in the "crit" parameter.
+     * listed in the "crit" parameter. TODO: This is not just for crit params
      */
     T_COSE_ERR_TOO_MANY_PARAMETERS = 26,
 
@@ -413,11 +432,12 @@ enum t_cose_err_t {
     T_COSE_ERR_DUPLICATE_PARAMETER = 34,
 
     /** A header parameter that should be protected (alg id or crit)
-     * is not. This occurs when verifying a \c COSE_Sign1 that is
-     * improperly constructed. */
+     * is not. This occurs when verifying, decrypting,.... */
     T_COSE_ERR_PARAMETER_NOT_PROTECTED = 35,
 
-    /** Something is wrong with the crit parameter. */
+    /** Something is wrong with the crit parameter. It may be not well-formed,
+     * invalid, have more than \ref T_COSE_MAX_CRITICAL_PARAMS values and
+     * other. */
     T_COSE_ERR_CRIT_PARAMETER = 36,
 
     /** More than \ref T_COSE_MAX_TAGS_TO_RETURN unprocessed tags when
@@ -541,7 +561,10 @@ enum t_cose_err_t {
 
     T_COSE_ERR_NO_VERIFIERS = 66,
 
-    /* A verifier declined to verify a COSE_Signature for a reason other
+    /* When \ref T_COSE_OPT_VERIFY_ALL_SIGNATURES is requested, one of the
+     * signatures could not be verified because no verifier was configured
+     * to handle it, typically because there was not verify for the algorithm.
+     * Also returned by a verifier when it declines to verify a COSE_Signature for a reason other
      * than algorithm ID or kid. */
     T_COSE_ERR_DECLINE = 67,
 
@@ -578,8 +601,42 @@ enum t_cose_err_t {
     /** The length of an input is invalid. In particular, this occurs with the OpenSSL crypto
      * adaptor when a size greater than MAX_INT is given because OpenSSL
      * input lengths are type int rather than size_t. */
-    T_COSE_ERR_INVALID_LENGTH = 77
+    T_COSE_ERR_INVALID_LENGTH = 77,
 
+    /** The HMAC algorithm is not supported.  */
+    T_COSE_ERR_UNSUPPORTED_HMAC_ALG = 78,
+
+    /** The HMAC algorithm is not supported.  */
+    T_COSE_ERR_HMAC_GENERAL_FAIL = 79,
+
+    /** The HMAC did not successfully verify.  */
+    T_COSE_ERR_HMAC_VERIFY = 80,
+
+    /** The key agreement failed.  */
+    T_COSE_ERR_KEY_AGREEMENT_FAIL = 81,
+
+    /** General unsupported operation failure. */
+    T_COSE_ERR_UNSUPPORTED = 82,
+
+    /* A signing operation is in progress. The function returning this value
+     * can be called again until it returns \ref T_COSE_SUCCESS or error.
+     */
+    T_COSE_ERR_SIG_IN_PROGRESS = 83,
+
+    /* A T_COSE_OPT_XXX is invalid in some way. */
+    T_COSE_ERR_BAD_OPT = 84,
+
+    T_COSE_ERR_CANT_DETERMINE_MESSAGE_TYPE = 85,
+
+    T_COSE_ERR_WRONG_COSE_MESSAGE_TYPE = 86,
+
+    T_COSE_ERR_KDF_BUFFER_TOO_SMALL = 87,
+
+    /* Probably need to set a KDF context info buffer
+     * to be larger because there are too many protected
+     * headers, party u/v identities were added or
+     * supp info was added. TODO: see xxxx*/
+    T_COSE_ERR_KDF_CONTEXT_SIZE = 88
 };
 
 
@@ -648,20 +705,46 @@ enum t_cose_err_t {
  */
 #define T_COSE_OPT_OMIT_CBOR_TAG 0x00000400
 
-  
+
 /**
- * When verifying or signing a COSE message, cryptographic operations
- * like verification and decryption will not be performed. Keys needed
+ * When verifying a COSE message, cryptographic operations
+ * like verification will not be performed. Keys needed
  * for these operations are not needed. This is useful to decode a
  * COSE message to get the header parameter(s) to lookup/find/identify
  * the required key(s) (e.g., the kid parameter).  Then the key(s)
  * are/is configured and the message is decoded again without this
  * option.
  *
- * Note that anything returned (parameters, payload) will not have
+ * Note that anything returned (parameters and payload) will not have
  * been verified and should be considered untrusted.
  */
 #define T_COSE_OPT_DECODE_ONLY  0x00000800
+
+
+/**
+ * Functions like t_cose_sign_verify() and t_cose_encrypt_dec() will
+ * error out with \ref T_COSE_ERR_UNKNOWN_CRITICAL_PARAMETER if there
+ * are any unknown critical header parameters.
+ *
+ * This option turns off the check for critical parameters. if this is
+ * set, the caller of t_cose takes responsibility for checking all the
+ * parameters decoded to be sure there are no critical parameters that
+ * are not understood.
+ */
+#define T_COSE_OPT_NO_CRIT_PARAM_CHECK  0x00001000
+#define T_COSE_OPT_UNKNOWN_CRIT_ALLOWED  T_COSE_OPT_NO_CRIT_PARAM_CHECK
+
+
+
+
+/**
+ * The maximum number of unprocessed tags that can be returned by
+ * t_cose_xxx_get_nth_tag(). The CWT
+ * tag is an example of the tags that might returned. The COSE tags
+ * that are processed, don't count here.
+ */
+#define T_COSE_MAX_TAGS_TO_RETURN 4
+
 
 
 /* The lower 8 bits of the options give the type of the
@@ -683,12 +766,9 @@ enum t_cose_err_t {
 #define T_COSE_OPT_MESSAGE_TYPE_MAC         97
 #define T_COSE_OPT_MESSAGE_TYPE_MAC0        17
 
-// TODO: more meaningful names
+// TODO: get rid of this
 #define T_COSE_OPT_IS_SIGN1(opts) \
    ((T_COSE_OPT_MESSAGE_TYPE_MASK & opts) == T_COSE_OPT_MESSAGE_TYPE_SIGN1)
-
-#define T_COSE_OPT_IS_SIGN(opts) \
-((T_COSE_OPT_MESSAGE_TYPE_MASK & opts) == T_COSE_OPT_MESSAGE_TYPE_SIGN)
 
 /* Not expecting any more. */
 
@@ -749,6 +829,24 @@ struct t_cose_sign_inputs {
     struct q_useful_buf_c  sign_protected;
     struct q_useful_buf_c  payload;
 };
+
+
+
+
+/* A COSE algorithm ID and the number of bits for the key. Typically,
+ * the number of bits in the key is known from the alg ID, but not
+ * always. This structure is typically used to give input for
+ * the construction of COSE_KDF_Context.
+ *
+ * alg_bits should be size_t to be completely type-consistent,
+ * but that would push the size of this structure over an
+ * an alignment boundary and double its size.
+ */
+struct t_cose_alg_and_bits {
+    int32_t   cose_alg_id;
+    uint32_t  bits_in_key;
+};
+
 
 
 

@@ -30,7 +30,7 @@ extern "C" {
  * - The definition of struct t_cose_key, an abstraction of a
  *   cryptographic key.
  *
- * - APIs to initialize struct t_cose_key from common or 
+ * - APIs to initialize struct t_cose_key from common or
  *   standard key representations.
  *
  * -  Encoding and decoding of COSE_Key defined in RFC 9052.
@@ -171,7 +171,7 @@ struct t_cose_key {
  * it seems unnecessary and was not supported uniformly. It is
  * unneccessary because individual t_cose libraries are for a
  * particular crypto library and only one is supported at a time by
- * t_cose. Removal of the he crypto_lib member also saves object code)
+ * t_cose. Removal of the crypto_lib member also saves object code.)
  */
 
 

@@ -2,6 +2,7 @@
  * t_cose_make_test_messages.c
  *
  * Copyright (c) 2019-2022, Laurence Lundblade. All rights reserved.
+ * Copyright (c) 2023, Arm Limited. All rights reserved.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  *
@@ -12,6 +13,7 @@
 #include "qcbor/qcbor.h"
 #include "t_cose_crypto.h"
 #include "t_cose_util.h"
+#include "t_cose/t_cose_signature_main.h"
 
 
 /**
@@ -160,6 +162,11 @@ encode_protected_parameters(uint32_t            test_message_options,
         QCBOREncode_CloseArray(&cbor_encode_ctx);
     }
 
+    if(test_message_options & T_COSE_TEST_BAD_CRIT_PARAMETER) {
+        QCBOREncode_AddSZStringToMapN(&cbor_encode_ctx,
+                                      T_COSE_HEADER_PARAM_CRIT, "hi");
+    }
+
     if(test_message_options & T_COSE_TEST_EMPTY_CRIT_PARAMETER) {
         QCBOREncode_OpenArrayInMapN(&cbor_encode_ctx, T_COSE_HEADER_PARAM_CRIT);
         QCBOREncode_CloseArray(&cbor_encode_ctx);
@@ -238,11 +245,6 @@ add_unprotected_parameters(uint32_t              test_message_options,
         QCBOREncode_AddBytes(cbor_encode_ctx, kid);
     }
 
-    if(test_message_options & T_COSE_TEST_BAD_CRIT_PARAMETER) {
-        QCBOREncode_AddSZStringToMapN(cbor_encode_ctx,
-                                      T_COSE_HEADER_PARAM_CRIT, "hi");
-    }
-
     if(test_message_options & T_COSE_TEST_EXTRA_PARAMETER) {
         QCBOREncode_OpenArrayInMapN(cbor_encode_ctx, 55);
         QCBOREncode_OpenMap(cbor_encode_ctx);
@@ -305,9 +307,6 @@ add_unprotected_parameters(uint32_t              test_message_options,
         QCBOREncode_AddBytesToMapN(cbor_encode_ctx,
                                    T_COSE_HEADER_PARAM_IV,
                                    Q_USEFUL_BUF_FROM_SZ_LITERAL("iv"));
-        QCBOREncode_AddBytesToMapN(cbor_encode_ctx,
-                                   T_COSE_HEADER_PARAM_PARTIAL_IV,
-                                   Q_USEFUL_BUF_FROM_SZ_LITERAL("partial_iv"));
         QCBOREncode_AddInt64ToMapN(cbor_encode_ctx,
                                    T_COSE_HEADER_PARAM_CONTENT_TYPE,
                                    1);
@@ -447,7 +446,7 @@ t_cose_sign1_test_message_output_signature(struct t_cose_sign1_sign_ctx *me,
     /* Pointer and length of the buffer for the signature */
     struct q_useful_buf          buffer_for_signature;
     /* Buffer for the tbs hash. */
-    Q_USEFUL_BUF_MAKE_STACK_UB(  buffer_for_tbs_hash, T_COSE_CRYPTO_MAX_HASH_SIZE);
+    Q_USEFUL_BUF_MAKE_STACK_UB(  buffer_for_tbs_hash, T_COSE_MAIN_MAX_HASH_SIZE);
     struct q_useful_buf_c        signed_payload;
     struct t_cose_sign_inputs           sign_inputs;
 

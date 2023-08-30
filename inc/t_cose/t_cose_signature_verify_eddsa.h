@@ -22,22 +22,20 @@
 extern "C" {
 #endif
 
-/* Warning: this is still early development. Documentation may be incorrect. */
-
 
 /**
- * Verification context. */
+ * Verification context.
+ */
 struct t_cose_signature_verify_eddsa {
     /* Private data structure */
 
-    /* t_cose_signature_verify must be the first item for the polymorphism to work.
-     * This structure, t_cose_signature_verify_eddsa, will sometimes be uses as
-     * a t_cose_signature_verify.
+    /* t_cose_signature_verify must be the first item for the
+     * polymorphism to work.  This structure,
+     * t_cose_signature_verify_eddsa, will sometimes be uses as a
+     * t_cose_signature_verify.
      */
     struct t_cose_signature_verify  s;
     struct t_cose_key               verification_key;
-    t_cose_special_param_decode_cb *special_param_decode_cb;
-    void                           *special_param_decode_ctx;
     uint32_t                        option_flags;
 
     struct q_useful_buf_c           verification_kid;
@@ -59,6 +57,7 @@ struct t_cose_signature_verify_eddsa {
 };
 
 
+// TODO: get rid of option_flags?
 void
 t_cose_signature_verify_eddsa_init(struct t_cose_signature_verify_eddsa *me,
                                    uint32_t                option_flags);
@@ -71,7 +70,7 @@ t_cose_signature_verify_eddsa_set_key(struct t_cose_signature_verify_eddsa *me,
 
 static void
 t_cose_signature_verify_eddsa_set_special_param_decoder(struct t_cose_signature_verify_eddsa *me,
-                                                t_cose_special_param_decode_cb               *decode_cb,
+                                                t_cose_param_special_decode_cb               *decode_cb,
                                                 void                                         *decode_ctx);
 
 /**
@@ -144,16 +143,17 @@ t_cose_signature_verify_eddsa_set_key(struct t_cose_signature_verify_eddsa *me,
 
 static inline void
 t_cose_signature_verify_eddsa_set_special_param_decoder(struct t_cose_signature_verify_eddsa *me,
-                                                        t_cose_special_param_decode_cb       *decode_cb,
-                                                        void                                 *decode_ctx)
+                                                        t_cose_param_special_decode_cb       *decode_cb,
+                                                        void      *decode_ctx)
 {
-    me->special_param_decode_cb  = decode_cb;
-    me->special_param_decode_ctx = decode_ctx;
+    struct t_cose_signature_verify *me_x = t_cose_signature_verify_from_eddsa(me);
+    me_x->special_param_decode_cb  = decode_cb;
+    me_x->special_param_decode_ctx = decode_ctx;
 }
 
 static inline void
 t_cose_signature_verify_eddsa_set_auxiliary_buffer(struct t_cose_signature_verify_eddsa *me,
-                                                   struct q_useful_buf                   auxiliary_buffer)
+                                        struct q_useful_buf auxiliary_buffer)
 {
     me->auxiliary_buffer = auxiliary_buffer;
 

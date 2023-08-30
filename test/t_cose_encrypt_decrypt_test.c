@@ -10,15 +10,12 @@
 
 
 #include "t_cose_encrypt_decrypt_test.h"
-
 #include "t_cose/t_cose_encrypt_dec.h"
 #include "t_cose/t_cose_encrypt_enc.h"
+#include "t_cose/t_cose_recipient_dec_esdh.h"
+#include "t_cose/t_cose_recipient_enc_esdh.h"
 
-#ifndef T_COSE_DISABLE_HPKE
-#include "t_cose/t_cose_recipient_enc_hpke.h"
-#include "t_cose/t_cose_recipient_dec_hpke.h"
-#include "init_keys.h"
-#endif
+
 
 #define PAYLOAD  "This is the payload"
 #define TEST_KID "fixed_test_key_id"
@@ -120,6 +117,7 @@ check_headers(const struct t_cose_parameter *headers)
 
 }
 
+
 int32_t encrypt0_enc_dec(int32_t cose_algorithm_id)
 {
     struct t_cose_encrypt_enc      enc_context;
@@ -176,7 +174,7 @@ int32_t encrypt0_enc_dec(int32_t cose_algorithm_id)
 
     t_cose_encrypt_set_cek(&enc_context, cek);
 
-    ps[0] = t_cose_make_ct_tstr_parameter(Q_USEFUL_BUF_FROM_SZ_LITERAL("text/plain"));
+    ps[0] = t_cose_param_make_ct_tstr(Q_USEFUL_BUF_FROM_SZ_LITERAL("text/plain"));
     ps[0].next = &ps[1];
     ps[1].value_type = T_COSE_PARAMETER_TYPE_BYTE_STRING;
     ps[1].value.string = Q_USEFUL_BUF_FROM_SZ_LITERAL("xxxxxxxxxx");
@@ -283,106 +281,7 @@ Done2:
     return return_value;
 }
 
-#ifndef T_COSE_DISABLE_HPKE
-int32_t
-encrypt_enc_dec(int32_t                cose_algorithm_id,
-                uint16_t               kem_id,
-                uint16_t               kdf_id,
-                uint16_t               aead_id,
-                struct q_useful_buf_c  kid,
-                struct t_cose_key      skR,
-                struct t_cose_key      pkR,
-                struct q_useful_buf_c  payload,
-                struct q_useful_buf_c  aad)
-{
-    struct t_cose_encrypt_enc        enc_ctx;
-    enum t_cose_err_t                result;
-    int32_t                          return_value=0;
-    struct t_cose_recipient_enc_hpke recipient;
-    struct q_useful_buf_c            cose_encrypted_message;
-    struct q_useful_buf_c            decrypted_plain_text;
 
-    Q_USEFUL_BUF_MAKE_STACK_UB  (    cose_encrypt_message_buffer, 200);
-    Q_USEFUL_BUF_MAKE_STACK_UB  (    decrypted_plaintext_buffer, 100);
-    struct t_cose_recipient_dec_hpke dec_recipient;
-    struct t_cose_encrypt_dec_ctx    dec_ctx;
-
-    /* Initialize the encryption context telling it we want
-     * a COSE_Encrypt (not a COSE_Encrypt0) because we're doing HPKE with a
-     * COSE_Recpipient. Also tell it the AEAD algorithm for the
-     * body of the message.
-     */
-    t_cose_encrypt_enc_init(&enc_ctx,
-                            T_COSE_OPT_MESSAGE_TYPE_ENCRYPT,
-                            cose_algorithm_id);
-
-
-    /* Create the recipient object telling it the algorithm and the public key
-     * for the COSE_Recipient it's going to make. Then give that object
-     * to the main encryption context. (Only one recipient is set here, but
-     * there could be more)
-     */
-    t_cose_recipient_enc_hpke_init(&recipient,
-                                    kem_id,   /* kem id */
-                                    kdf_id,   /* kdf id */
-                                    aead_id); /* aead id */
-
-    t_cose_recipient_enc_hpke_set_key(&recipient,
-                                       pkR,
-                                       kid);
-    t_cose_encrypt_add_recipient(&enc_ctx,
-                                 (struct t_cose_recipient_enc *)&recipient);
-
-
-    /* Now do the actual encryption */
-    result = t_cose_encrypt_enc(&enc_ctx, /* in: encryption context */
-                                 payload, /* in: payload to encrypt */
-                                 aad,
-                                 cose_encrypt_message_buffer, /* in: buffer for COSE_Encrypt */
-                                 &cose_encrypted_message); /* out: COSE_Encrypt */
-
-    if (result != T_COSE_SUCCESS) {
-        return_value = 2000 + (int32_t)result;
-        goto Done;
-    }
-
-
-    /* Set up the decryption context, telling it what type of
-     * message to expect if there's no tag (that part isn't quite implemented right yet anyway).
-     */
-    t_cose_encrypt_dec_init(&dec_ctx, T_COSE_OPT_MESSAGE_TYPE_ENCRYPT);
-
-
-    /* Set up the recipient object with the key material. We happen to know
-     * what the algorithm and key are in advance so we don't have to
-     * decode the parameters first to figure that out (not that this part is
-     * working yet). */
-    t_cose_recipient_dec_hpke_init(&dec_recipient);
-    t_cose_recipient_dec_hpke_set_skr(&dec_recipient,
-                                      skR,
-                                      kid);
-    t_cose_encrypt_dec_add_recipient(&dec_ctx, (struct t_cose_recipient_dec *)&dec_recipient);
-
-    result = t_cose_encrypt_dec(&dec_ctx,
-                                cose_encrypted_message, /* in: the COSE_Encrypt message */
-                                aad,
-                                decrypted_plaintext_buffer,
-                                &decrypted_plain_text,
-                                NULL);
-
-    if (result != T_COSE_SUCCESS) {
-        return_value = 3000 + (int32_t)result;
-        goto Done;
-    }
-
-    if(q_useful_buf_compare(decrypted_plain_text, payload)) {
-        return_value = 1;
-        goto Done;
-    }
-Done:
-    return (int32_t)return_value;
-}
-#endif /* T_COSE_DISABLE_HPKE */
 
 
 int32_t base_encrypt_decrypt_test(void)
@@ -403,45 +302,494 @@ int32_t base_encrypt_decrypt_test(void)
         return rv;
     }
 
-//    rv = encrypt0_enc_dec(T_COSE_ALGORITHM_AES256CCM_16_128);
-//    if(rv) {
-//        return rv;
-//    }
-
-#ifndef T_COSE_DISABLE_HPKE
-    /* Create a key pair.  This is a fixed test key pair. The creation
-     * of this key pair is crypto-library dependent because t_cose_key
-     * is crypto-library dependent. See t_cose_key.h and the examples
-     * to understand key-pair creation better. */
-    enum t_cose_err_t result;
-    struct t_cose_key skR;
-    struct t_cose_key pkR;
-
-    /* Load public / private recipient key */
-    result = init_fixed_test_encryption_key(T_COSE_ELLIPTIC_CURVE_P_256,
-                                            &pkR, /* out: public key to be used for encryption */
-                                            &skR); /* out: corresponding private key for decryption */
-    if(result != T_COSE_SUCCESS) {
-       return -7; /* return some error value */
-    }
-
-    rv = encrypt_enc_dec(T_COSE_ALGORITHM_A128GCM,
-                         T_COSE_HPKE_KEM_ID_P256,
-                         T_COSE_HPKE_KDF_ID_HKDF_SHA256,
-                         T_COSE_HPKE_AEAD_ID_AES_GCM_128,
-                         Q_USEFUL_BUF_FROM_SZ_LITERAL(TEST_KID),
-                         skR,
-                         pkR,
-                         Q_USEFUL_BUF_FROM_SZ_LITERAL(PAYLOAD),
-                         NULL_Q_USEFUL_BUF_C);
-    if(rv) {
-        return rv;
-    }
-    free_fixed_test_encryption_key(skR);
-    free_fixed_test_encryption_key(pkR);
-#endif /* T_COSE_DISABLE_HPKE */
     return 0;
 
 }
 
 
+
+
+#include "init_keys.h"
+
+#ifndef T_COSE_USE_B_CON_SHA256 /* test crypto doesn't support ECDH */
+
+
+
+static int32_t
+esdh_enc_dec(int32_t curve)
+{
+    enum t_cose_err_t                result;
+    struct t_cose_key                privatekey;
+    struct t_cose_key                publickey;
+    struct t_cose_encrypt_enc        enc_ctx;
+    struct t_cose_recipient_enc_esdh recipient;
+    struct q_useful_buf_c            cose_encrypted_message;
+    Q_USEFUL_BUF_MAKE_STACK_UB  (    cose_encrypt_message_buffer, 400);
+    struct t_cose_encrypt_dec_ctx    dec_ctx;
+    struct t_cose_recipient_dec_esdh dec_recipient;
+    Q_USEFUL_BUF_MAKE_STACK_UB  (    decrypted_buffer, 400);
+    struct q_useful_buf_c            decrypted_payload;
+    struct t_cose_parameter         *params;
+
+    if(!t_cose_is_algorithm_supported(curve)) {
+        /* Mbed TLS 2.28 doesn't support key wrap. */
+        /* TODO: check for other required algorithms here */
+        return INT32_MIN;
+    }
+
+   /* Create a key pair.  This is a fixed test key pair. The creation
+     * of this key pair is crypto-library dependent because t_cose_key
+     * is crypto-library dependent. See t_cose_key.h and the examples
+     * to understand key-pair creation better. */
+    result = init_fixed_test_ec_encryption_key(curve,
+                                              &publickey, /* out: public key to be used for encryption */
+                                              &privatekey); /* out: corresponding private key for decryption */
+    if(result != T_COSE_SUCCESS) {
+        goto Done;
+    }
+
+    /* Initialize the encryption context telling it we want
+     * a COSE_Encrypt (not a COSE_Encrypt0) because we're doing ECDH with a
+     * COSE_Recipient. Also tell it the AEAD algorithm for the
+     * body of the message.
+     */
+    t_cose_encrypt_enc_init(&enc_ctx,
+                             T_COSE_OPT_MESSAGE_TYPE_ENCRYPT,
+                             T_COSE_ALGORITHM_A128GCM);
+
+    /* Create the recipient object telling it the algorithm and the public key
+     * for the COSE_Recipient it's going to make.
+     */
+    t_cose_recipient_enc_esdh_init(&recipient,
+                                    T_COSE_ALGORITHM_ECDH_ES_A128KW, /* content key distribution id */
+                                    curve);    /* curve id */
+
+    t_cose_recipient_enc_esdh_set_key(&recipient,
+                                       publickey,
+                                       Q_USEFUL_BUF_FROM_SZ_LITERAL(TEST_KID));
+
+    /* Give the recipient object to the main encryption context.
+     * (Only one recipient is set here, but there could be more).
+     */
+    t_cose_encrypt_add_recipient(&enc_ctx,
+                                 (struct t_cose_recipient_enc *)&recipient);
+
+    /* Now do the actual encryption */
+    result = t_cose_encrypt_enc(&enc_ctx, /* in: encryption context */
+                                 Q_USEFUL_BUF_FROM_SZ_LITERAL(PAYLOAD), /* in: payload to encrypt */
+                                 NULL_Q_USEFUL_BUF_C, /* in/unused: AAD */
+                                 cose_encrypt_message_buffer, /* in: buffer for COSE_Encrypt */
+                                &cose_encrypted_message); /* out: COSE_Encrypt */
+
+    if (result != T_COSE_SUCCESS) {
+        goto Done;
+    }
+
+
+    t_cose_encrypt_dec_init(&dec_ctx, 0);
+
+    t_cose_recipient_dec_esdh_init(&dec_recipient);
+
+    t_cose_recipient_dec_esdh_set_key(&dec_recipient, privatekey, NULL_Q_USEFUL_BUF_C);
+
+    t_cose_encrypt_dec_add_recipient(&dec_ctx,
+                                     (struct t_cose_recipient_dec *)&dec_recipient);
+
+    result = t_cose_encrypt_dec(&dec_ctx,
+                                 cose_encrypted_message,
+                                 NULL_Q_USEFUL_BUF_C, /* in/unused: AAD */
+                                 decrypted_buffer,
+                                &decrypted_payload,
+                                &params);
+    if(result != T_COSE_SUCCESS) {
+        goto Done;
+    }
+
+Done:
+    free_fixed_test_ec_encryption_key(publickey);
+    free_fixed_test_ec_encryption_key(privatekey);
+
+    return (int32_t)result;
+}
+
+
+int32_t
+esdh_enc_dec_test(void)
+{
+    int32_t result;
+
+    if(!t_cose_is_algorithm_supported(T_COSE_ALGORITHM_A128KW)) {
+        /* Mbed TLS 2.28 doesn't support key wrap. */
+        return INT32_MIN;
+    }
+
+    result = esdh_enc_dec(T_COSE_ELLIPTIC_CURVE_P_256);
+    if(result) {
+        return result;
+    }
+    return esdh_enc_dec(T_COSE_ELLIPTIC_CURVE_P_521);
+}
+
+
+
+/* This comes from the COSE WG Examples repository */
+
+static const uint8_t p256_wrap_128_02[] = {
+    0xD8, 0x60, 0x84, 0x43, 0xA1, 0x01, 0x03, 0xA1,
+    0x05, 0x4C, 0x02, 0xD1, 0xF7, 0xE6, 0xF2, 0x6C,
+    0x43, 0xD4, 0x86, 0x8D, 0x87, 0xCE, 0x58, 0x24,
+    0x25, 0x6B, 0x74, 0x8D, 0xEB, 0x64, 0x71, 0x31,
+    0xC1, 0x2A, 0x10, 0xAC, 0x26, 0x1D, 0xA0, 0x62,
+    0x8E, 0x42, 0x04, 0x92, 0xA3, 0x6F, 0x3D, 0xED,
+    0x86, 0x42, 0xB4, 0xB6, 0xFA, 0x1E, 0xB1, 0x5D,
+    0xCE, 0xC8, 0x0A, 0x0F, 0x81, 0x83, 0x44, 0xA1,
+    0x01, 0x38, 0x1C, 0xA2, 0x20, 0xA4, 0x01, 0x02,
+    0x20, 0x01, 0x21, 0x58, 0x20, 0xE1, 0x2C, 0x93,
+    0x8B, 0x18, 0x22, 0x58, 0xC9, 0xD4, 0x47, 0xD4,
+    0x18, 0x21, 0x71, 0x52, 0x61, 0xAE, 0x99, 0xAD,
+    0x77, 0xD2, 0x41, 0x94, 0x3F, 0x4A, 0x12, 0xFF,
+    0x20, 0xDD, 0x3C, 0xE4, 0x00, 0x22, 0x58, 0x20,
+    0x48, 0xB0, 0x58, 0x89, 0x03, 0x36, 0x57, 0x33,
+    0xB9, 0x8D, 0x38, 0x8C, 0x61, 0x36, 0xC0, 0x4B,
+    0x7F, 0xFD, 0x1A, 0x77, 0x0C, 0xD2, 0x61, 0x11,
+    0x89, 0xEE, 0x84, 0xE9, 0x94, 0x1A, 0x7E, 0x26,
+    0x04, 0x58, 0x24, 0x6D, 0x65, 0x72, 0x69, 0x61,
+    0x64, 0x6F, 0x63, 0x2E, 0x62, 0x72, 0x61, 0x6E,
+    0x64, 0x79, 0x62, 0x75, 0x63, 0x6B, 0x40, 0x62,
+    0x75, 0x63, 0x6B, 0x6C, 0x61, 0x6E, 0x64, 0x2E,
+    0x65, 0x78, 0x61, 0x6D, 0x70, 0x6C, 0x65, 0x58,
+    0x28, 0x50, 0x8F, 0xAD, 0x30, 0xA1, 0xA9, 0x5D,
+    0x13, 0x80, 0xB5, 0x16, 0x7D, 0x03, 0x27, 0x99,
+    0xC7, 0x24, 0x77, 0xAB, 0x60, 0x25, 0x8A, 0xBF,
+    0xB7, 0x1C, 0x7A, 0xB6, 0x03, 0xA4, 0x89, 0x0E,
+    0xF4, 0x4F, 0x13, 0x63, 0xED, 0x9F, 0x56, 0x9E,
+    0x85};
+
+
+int32_t decrypt_known_good(void)
+{
+    enum t_cose_err_t                result;
+    struct t_cose_encrypt_dec_ctx    dec_ctx;
+    struct t_cose_recipient_dec_esdh dec_recipient;
+    Q_USEFUL_BUF_MAKE_STACK_UB  (    decrypted_buffer, 400);
+    struct q_useful_buf_c            decrypted_payload;
+    struct t_cose_parameter         *params;
+    struct t_cose_key                privatekey;
+    struct t_cose_key                pubkey;
+
+    if(!t_cose_is_algorithm_supported(T_COSE_ALGORITHM_A128KW)) {
+        /* Mbed TLS 2.28 doesn't support key wrap. */
+        /* TODO: check for other required algorithms here */
+        return INT32_MIN;
+    }
+
+    result = init_fixed_test_ec_encryption_key(T_COSE_ELLIPTIC_CURVE_P_256,
+                                              &pubkey,      /* out: public key to be used for encryption */
+                                              &privatekey); /* out: corresponding private key for decryption */
+    if(result != T_COSE_SUCCESS) {
+        return (int32_t)result + 1000;
+    }
+
+
+    t_cose_encrypt_dec_init(&dec_ctx, 0);
+
+    t_cose_recipient_dec_esdh_init(&dec_recipient);
+
+    t_cose_recipient_dec_esdh_set_key(&dec_recipient,
+                                      privatekey, /* in: private key handle */
+                                      NULL_Q_USEFUL_BUF_C); /* in: kid */
+
+    t_cose_encrypt_dec_add_recipient(&dec_ctx,
+                                     (struct t_cose_recipient_dec *)&dec_recipient);
+
+    result = t_cose_encrypt_dec(&dec_ctx,
+                                UsefulBuf_FROM_BYTE_ARRAY_LITERAL(p256_wrap_128_02), /* in: message to decrypt */
+                                NULL_Q_USEFUL_BUF_C, /* in/unused: AAD */
+                                decrypted_buffer,
+                                &decrypted_payload,
+                                &params);
+
+    if(result != T_COSE_SUCCESS) {
+        return (int32_t)result + 2000;
+    }
+    free_fixed_test_ec_encryption_key(pubkey);
+    free_fixed_test_ec_encryption_key(privatekey);
+
+    return 0;
+}
+
+
+/* Input parameters for kdf_instance_test() */
+struct kdf_context_test_input {
+    struct q_useful_buf_c  party_u_ident;
+    struct q_useful_buf_c  party_v_ident;
+    bool do_not_send;
+    struct q_useful_buf_c  supp_pub_other;
+    struct q_useful_buf_c  supp_priv_info;
+    size_t                 kdf_context_size;
+    bool                   use_salt;
+    struct q_useful_buf_c  salt_bytes;
+};
+
+static enum t_cose_err_t
+kdf_instance_test(int32_t                             ecdh_alg,
+                  const struct kdf_context_test_input *enc_items,
+                  const struct kdf_context_test_input *dec_items)
+{
+    enum t_cose_err_t                result;
+    struct t_cose_key                privatekey;
+    struct t_cose_key                publickey;
+    struct t_cose_encrypt_enc        enc_ctx;
+    struct t_cose_recipient_enc_esdh recipient;
+    struct q_useful_buf_c            cose_encrypted_message;
+    Q_USEFUL_BUF_MAKE_STACK_UB  (    cose_encrypt_message_buffer, 400);
+    struct t_cose_encrypt_dec_ctx    dec_ctx;
+    struct t_cose_recipient_dec_esdh dec_recipient;
+    Q_USEFUL_BUF_MAKE_STACK_UB  (    decrypted_buffer, 400);
+    struct q_useful_buf_c            decrypted_payload;
+    struct t_cose_parameter         *params;
+    Q_USEFUL_BUF_MAKE_STACK_UB  (    kdf_ctx_buf, 400);
+    struct t_cose_parameter          _params[10];
+    struct t_cose_parameter_storage  param_storage;
+
+
+    result = init_fixed_test_ec_encryption_key(ecdh_alg,
+                                              &publickey, /* out: public key to be used for encryption */
+                                              &privatekey); /* out: corresponding private key for decryption */
+    if(result != T_COSE_SUCCESS) {
+        result = T_COSE_ERR_FAIL;
+        goto Done;
+    }
+
+    t_cose_encrypt_enc_init(&enc_ctx,
+                             T_COSE_OPT_MESSAGE_TYPE_ENCRYPT,
+                             T_COSE_ALGORITHM_A128GCM);
+
+    t_cose_recipient_enc_esdh_init(&recipient,
+                                    T_COSE_ALGORITHM_ECDH_ES_A128KW, /* content key distribution id */
+                                    T_COSE_ELLIPTIC_CURVE_P_256);    /* curve id */
+
+    t_cose_recipient_enc_esdh_set_key(&recipient,
+                                       publickey,
+                                       Q_USEFUL_BUF_FROM_SZ_LITERAL(TEST_KID));
+
+    t_cose_recipient_enc_esdh_party_info(&recipient,
+                                         enc_items->party_u_ident,
+                                         enc_items->party_v_ident,
+                                         enc_items->do_not_send);
+
+    t_cose_recipient_enc_esdh_supp_info(&recipient,
+                                        enc_items->supp_pub_other,
+                                        enc_items->supp_priv_info);
+
+    kdf_ctx_buf.len = enc_items->kdf_context_size;
+    t_cose_recipient_enc_esdh_kdf_buf(&recipient, kdf_ctx_buf);
+
+    t_cose_recipient_enc_esdh_salt(&recipient,
+                                   enc_items->use_salt,
+                                   enc_items->salt_bytes);
+
+    /* Give the recipient object to the main encryption context.
+     * (Only one recipient is set here, but there could be more).
+     */
+    t_cose_encrypt_add_recipient(&enc_ctx,
+                                 (struct t_cose_recipient_enc *)&recipient);
+
+    /* Now do the actual encryption */
+    result = t_cose_encrypt_enc(&enc_ctx, /* in: encryption context */
+                                 Q_USEFUL_BUF_FROM_SZ_LITERAL(PAYLOAD), /* in: payload to encrypt */
+                                 NULL_Q_USEFUL_BUF_C, /* in/unused: AAD */
+                                 cose_encrypt_message_buffer, /* in: buffer for COSE_Encrypt */
+                                 &cose_encrypted_message); /* out: COSE_Encrypt */
+
+    if (result != T_COSE_SUCCESS) {
+        result = T_COSE_ERR_FAIL;
+        goto Done;
+    }
+
+
+    t_cose_encrypt_dec_init(&dec_ctx, 0);
+
+    T_COSE_PARAM_STORAGE_INIT(param_storage, _params);
+    t_cose_encrypt_add_param_storage(&dec_ctx, &param_storage);
+
+    t_cose_recipient_dec_esdh_init(&dec_recipient);
+    t_cose_recipient_dec_esdh_set_key(&dec_recipient, privatekey, NULL_Q_USEFUL_BUF_C);
+    t_cose_encrypt_dec_add_recipient(&dec_ctx,
+                                     (struct t_cose_recipient_dec *)&dec_recipient);
+    t_cose_recipient_dec_esdh_party_info(&dec_recipient,
+                                         dec_items->party_u_ident,
+                                         dec_items->party_v_ident);
+    t_cose_recipient_dec_esdh_supp_info(&dec_recipient,
+                                        dec_items->supp_pub_other,
+                                        dec_items->supp_priv_info);
+    /* OK to re use the buffer here */
+    kdf_ctx_buf.len = enc_items->kdf_context_size;
+    t_cose_recipient_dec_esdh_kdf_buf(&dec_recipient, kdf_ctx_buf);
+
+    result = t_cose_encrypt_dec(&dec_ctx,
+                                cose_encrypted_message,
+                                NULL_Q_USEFUL_BUF_C, /* in/unused: AAD */
+                                decrypted_buffer,
+                                &decrypted_payload,
+                                &params);
+Done:
+    free_fixed_test_ec_encryption_key(publickey);
+    free_fixed_test_ec_encryption_key(privatekey);
+
+    return result;
+}
+
+
+
+
+int32_t kdf_context_test(void)
+{
+    struct kdf_context_test_input enc_in;
+    struct kdf_context_test_input dec_in;
+    enum t_cose_err_t             test_result;
+    int32_t                       alg;
+
+    alg = T_COSE_ELLIPTIC_CURVE_P_256; // TODO: run this test for other algs
+    if(!t_cose_is_algorithm_supported(T_COSE_ALGORITHM_A128KW) ||
+       !t_cose_is_algorithm_supported(T_COSE_ALGORITHM_A128GCM)) {
+        /* Mbed TLS 2.28 doesn't support key wrap. */
+        /* TODO: check for other required algorithms here */
+        // TODO: check for ECDH or ECDH suite
+        return INT32_MIN;
+    }
+
+    enc_in.party_u_ident    = Q_USEFUL_BUF_FROM_SZ_LITERAL("Party U Sample");
+    enc_in.party_v_ident    = Q_USEFUL_BUF_FROM_SZ_LITERAL("Party V Sample");
+    enc_in.do_not_send      = false;
+    enc_in.supp_pub_other   = Q_USEFUL_BUF_FROM_SZ_LITERAL("Supplemental Public Info Sample");
+    enc_in.supp_priv_info   = Q_USEFUL_BUF_FROM_SZ_LITERAL("Supplemental Private Info Sample");
+    enc_in.kdf_context_size = 400;
+    enc_in.use_salt         = false;
+    enc_in.salt_bytes       = NULL_Q_USEFUL_BUF_C;
+
+    dec_in.party_u_ident    = Q_USEFUL_BUF_FROM_SZ_LITERAL("Party U Sample");
+    dec_in.party_v_ident    = Q_USEFUL_BUF_FROM_SZ_LITERAL("Party V Sample");
+    dec_in.supp_pub_other   = Q_USEFUL_BUF_FROM_SZ_LITERAL("Supplemental Public Info Sample");
+    dec_in.supp_priv_info   = Q_USEFUL_BUF_FROM_SZ_LITERAL("Supplemental Private Info Sample");
+    dec_in.kdf_context_size = 400;
+
+    /* Set all KDF context items and see success */
+    test_result = kdf_instance_test(alg, &enc_in, &dec_in);
+    if(test_result != T_COSE_SUCCESS) {
+        return 1000 + (int32_t)test_result;
+    }
+
+    dec_in.party_u_ident    = Q_USEFUL_BUF_FROM_SZ_LITERAL("FAIL Party U Sample");
+    /* Set all KDF context items with PartyU wrong and see failure */
+    test_result = kdf_instance_test(alg, &enc_in, &dec_in);
+    if(test_result != T_COSE_ERR_DATA_AUTH_FAILED) {
+        return 2000 + (int32_t)test_result;
+    }
+
+    dec_in.party_u_ident    = Q_USEFUL_BUF_FROM_SZ_LITERAL("Party U Sample");
+    dec_in.party_v_ident    = Q_USEFUL_BUF_FROM_SZ_LITERAL("FAIL Party V Sample");
+    /* Set all KDF context items with PartyV wrong and see failure */
+    test_result = kdf_instance_test(alg, &enc_in, &dec_in);
+    if(test_result != T_COSE_ERR_DATA_AUTH_FAILED) {
+        return 3000 + (int32_t)test_result;
+    }
+
+    dec_in.party_v_ident    = Q_USEFUL_BUF_FROM_SZ_LITERAL("Party V Sample");
+    dec_in.supp_pub_other   = Q_USEFUL_BUF_FROM_SZ_LITERAL("FAIL Supplemental Public Info Sample");
+    /* Set all KDF context items with supp_pub_other wrong and see failure */
+    test_result = kdf_instance_test(alg, &enc_in, &dec_in);
+    if(test_result != T_COSE_ERR_DATA_AUTH_FAILED) {
+        return 4000 + (int32_t)test_result;
+    }
+
+    dec_in.supp_pub_other   = Q_USEFUL_BUF_FROM_SZ_LITERAL("Supplemental Public Info Sample");
+    dec_in.supp_priv_info   = Q_USEFUL_BUF_FROM_SZ_LITERAL("FAIL Supplemental Private Info Sample");
+    /* Set all KDF context items with supp_priv_info wrong and see failure */
+    test_result = kdf_instance_test(alg, &enc_in, &dec_in);
+    if(test_result != T_COSE_ERR_DATA_AUTH_FAILED) {
+        return 5000 + (int32_t)test_result;
+    }
+
+    dec_in.supp_priv_info   = Q_USEFUL_BUF_FROM_SZ_LITERAL("Supplemental Private Info Sample");
+    /* Don't send the PartyU and PartyV so as to confirm reliance on setting them explicitly */
+    enc_in.do_not_send      = true;
+    test_result = kdf_instance_test(alg, &enc_in, &dec_in);
+    if(test_result != T_COSE_SUCCESS) {
+        return 6000 + (int32_t)test_result;
+    }
+
+    /* Successful test relying on PartyU and PartyV headers decode */
+    dec_in.party_u_ident    = NULL_Q_USEFUL_BUF_C;
+    dec_in.party_v_ident    = NULL_Q_USEFUL_BUF_C;
+    enc_in.do_not_send      = false;
+    test_result = kdf_instance_test(alg, &enc_in, &dec_in);
+    if(test_result != T_COSE_SUCCESS) {
+        return 7000 + (int32_t)test_result;
+    }
+
+    /* Neither sent or set so fail */
+    enc_in.do_not_send      = true;
+    test_result = kdf_instance_test(alg, &enc_in, &dec_in);
+    if(test_result != T_COSE_ERR_DATA_AUTH_FAILED) {
+        return 8000 + (int32_t)test_result;
+    }
+
+    enc_in.party_u_ident    = NULL_Q_USEFUL_BUF_C;
+    enc_in.party_v_ident    = NULL_Q_USEFUL_BUF_C;
+    enc_in.do_not_send      = false;
+    enc_in.supp_pub_other   = Q_USEFUL_BUF_FROM_SZ_LITERAL("Supplemental Public Info Sample");
+    enc_in.supp_priv_info   = NULL_Q_USEFUL_BUF_C;
+    enc_in.kdf_context_size = 400;
+    enc_in.use_salt         = false;
+    enc_in.salt_bytes       = NULL_Q_USEFUL_BUF_C;
+
+    dec_in.party_u_ident    = NULL_Q_USEFUL_BUF_C;
+    dec_in.party_v_ident    = NULL_Q_USEFUL_BUF_C;
+    dec_in.supp_pub_other   = Q_USEFUL_BUF_FROM_SZ_LITERAL("Supplemental Public Info Sample");
+    dec_in.supp_priv_info   = NULL_Q_USEFUL_BUF_C;
+
+    /* Neither sent or set so fail */
+    test_result = kdf_instance_test(alg, &enc_in, &dec_in);
+    if(test_result != T_COSE_SUCCESS) {
+        return 9000 + (int32_t)test_result;
+    }
+
+    dec_in.supp_pub_other   = Q_USEFUL_BUF_FROM_SZ_LITERAL("FAIL Supplemental Public Info Sample");
+    test_result = kdf_instance_test(alg, &enc_in, &dec_in);
+    if(test_result != T_COSE_ERR_DATA_AUTH_FAILED) {
+        return 10000 + (int32_t)test_result;
+    }
+
+    /* Test with a RNG salt */
+    enc_in.party_u_ident    = NULL_Q_USEFUL_BUF_C;
+    enc_in.party_v_ident    = NULL_Q_USEFUL_BUF_C;
+    enc_in.do_not_send      = false;
+    enc_in.supp_pub_other   = Q_USEFUL_BUF_FROM_SZ_LITERAL("Supplemental Public Info Sample");
+    enc_in.supp_priv_info   = NULL_Q_USEFUL_BUF_C;
+    enc_in.kdf_context_size = 400;
+    enc_in.use_salt         = true;
+    enc_in.salt_bytes       = NULL_Q_USEFUL_BUF_C;
+
+    dec_in.party_u_ident    = NULL_Q_USEFUL_BUF_C;
+    dec_in.party_v_ident    = NULL_Q_USEFUL_BUF_C;
+    dec_in.supp_pub_other   = Q_USEFUL_BUF_FROM_SZ_LITERAL("Supplemental Public Info Sample");
+    dec_in.supp_priv_info   = NULL_Q_USEFUL_BUF_C;
+
+    enc_in.salt_bytes = Q_USEFUL_BUF_FROM_SZ_LITERAL("SALT");
+    /* Send a specific salt and use it. */
+    test_result = kdf_instance_test(alg, &enc_in, &dec_in);
+    if(test_result != T_COSE_SUCCESS) {
+        return 11000 + (int32_t)test_result;
+    }
+
+    enc_in.salt_bytes = NULL_Q_USEFUL_BUF_C;
+    /* A random generated salt. */
+    test_result = kdf_instance_test(alg, &enc_in, &dec_in);
+    if(test_result != T_COSE_SUCCESS) {
+        return 12000 + (int32_t)test_result;
+    }
+
+    return 0;
+}
+#endif /* !T_COSE_USE_B_CON_SHA256 */

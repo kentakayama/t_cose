@@ -37,13 +37,11 @@ t_cose_sign1_sign_init(struct t_cose_sign1_sign_ctx *me,
     // TODO: Translate any more options flags?
     t_cose_sign_sign_init(&(me->me2), option_flags | T_COSE_OPT_MESSAGE_TYPE_SIGN1);
 
-#ifndef T_COSE_DISABLE_EDDSA
     if(cose_algorithm_id == T_COSE_ALGORITHM_EDDSA) {
         t_cose_signature_sign_eddsa_init(&(me->signer.eddsa));
         t_cose_sign_add_signer(&(me->me2),
                        t_cose_signature_sign_from_eddsa(&(me->signer.eddsa)));
     } else
-#endif /* ! T_COSE_DISABLE_EDDSA */
     {
         t_cose_signature_sign_main_init(&(me->signer.general),
                                         me->cose_algorithm_id);
@@ -60,14 +58,11 @@ t_cose_sign1_set_signing_key(struct t_cose_sign1_sign_ctx *me,
 {
     me->signing_key = signing_key; /* Used by make test message */
     me->kid = kid; /* Used by make test message */
-#ifndef T_COSE_DISABLE_EDDSA
     if(me->cose_algorithm_id == T_COSE_ALGORITHM_EDDSA) {
         t_cose_signature_sign_eddsa_set_signing_key(&(me->signer.eddsa),
                                                      signing_key,
                                                      kid);
-    } else
-#endif /* ! T_COSE_DISABLE_EDDSA */
-    {
+    } else {
         t_cose_signature_sign_main_set_signing_key(&(me->signer.general),
                                                     signing_key,
                                                     kid);
@@ -80,7 +75,7 @@ void
 t_cose_sign1_set_content_type_uint(struct t_cose_sign1_sign_ctx *me,
                                    uint16_t                     content_type)
 {
-    me->content_id_param = t_cose_make_ct_uint_parameter(content_type);
+    me->content_id_param = t_cose_param_make_ct_uint(content_type);
 
     t_cose_sign_add_body_header_params(&(me->me2), &me->content_id_param);
 }
@@ -90,7 +85,7 @@ void
 t_cose_sign1_set_content_type_tstr(struct t_cose_sign1_sign_ctx *me,
                                    const char                   *content_type)
 {
-    me->content_id_param = t_cose_make_ct_tstr_parameter(q_useful_buf_from_sz(content_type));
+    me->content_id_param = t_cose_param_make_ct_tstr(q_useful_buf_from_sz(content_type));
 
     t_cose_sign_add_body_header_params(&(me->me2), &me->content_id_param);
 }

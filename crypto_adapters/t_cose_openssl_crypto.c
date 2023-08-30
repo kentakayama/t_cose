@@ -93,11 +93,9 @@ bool t_cose_crypto_is_algorithm_supported(int32_t cose_algorithm_id)
 #ifndef T_COSE_DISABLE_PS512
         T_COSE_ALGORITHM_PS512,
 #endif
-#ifndef T_COSE_DISABLE_EDDSA
         T_COSE_ALGORITHM_EDDSA,
-#endif
         T_COSE_ALGORITHM_A128GCM,
-        T_COSE_ALGORITHM_A192GCM, /* For 9053 key wrap and direct, not HPKE */
+        T_COSE_ALGORITHM_A192GCM,
         T_COSE_ALGORITHM_A256GCM,
 
 #ifndef T_COSE_DISABLE_KEYWRAP
@@ -105,6 +103,10 @@ bool t_cose_crypto_is_algorithm_supported(int32_t cose_algorithm_id)
         T_COSE_ALGORITHM_A192KW,
         T_COSE_ALGORITHM_A256KW,
 #endif /* T_COSE_DISABLE_KEYWRAP */
+
+        T_COSE_ALGORITHM_HMAC256,
+        T_COSE_ALGORITHM_HMAC384,
+        T_COSE_ALGORITHM_HMAC512,
 
         T_COSE_ALGORITHM_NONE /* List terminator */
     };
@@ -153,6 +155,32 @@ cose_hash_alg_to_ossl(int32_t cose_hash_alg_id)
     return EVP_get_digestbynid(nid);
 }
 
+/* As cose_hash_alg_to_ossl(), but for HMAC algorithms. */
+static const EVP_MD *
+cose_hmac_alg_to_ossl(int32_t cose_hmac_alg_id)
+{
+    int nid;
+
+    /*  switch() is less object code than t_cose_int16_map(). */
+    switch(cose_hmac_alg_id) {
+        case T_COSE_ALGORITHM_HMAC256:
+            nid = NID_sha256;
+            break;
+
+        case T_COSE_ALGORITHM_HMAC384:
+            nid = NID_sha384;
+            break;
+
+        case T_COSE_ALGORITHM_HMAC512:
+            nid = NID_sha512;
+            break;
+
+        default:
+            return NULL;
+    }
+
+    return EVP_get_digestbynid(nid);
+}
 
 
 /* OpenSSL archaically uses int for lengths in some APIs. t_cose
@@ -281,7 +309,7 @@ static unsigned ecdsa_key_size(EVP_PKEY *key_evp)
 /**
  * \brief Convert DER-encoded ECDSA signature to COSE-serialized signature
  *
- * \param[in] key_len             Size of the key in bytes -- governs sig size.
+ * \param[in] key_evp             The key used to produce the DER signature.
  * \param[in] der_signature       DER-encoded signature.
  * \param[in] signature_buffer    The buffer for output.
  *
@@ -311,7 +339,7 @@ ecdsa_signature_der_to_cose(EVP_PKEY              *key_evp,
 
     key_len = ecdsa_key_size(key_evp);
 
-    /* Put DER-encode sig into an ECDSA_SIG so we can get the r and s out. */
+    /* Put DER-encoded sig into an ECDSA_SIG so we can get the r and s out. */
     temp_der_sig_pointer = der_signature.ptr;
     es = d2i_ECDSA_SIG(NULL, &temp_der_sig_pointer, (long)der_signature.len);
     if(es == NULL) {
@@ -363,7 +391,7 @@ Done:
 /**
  * \brief Convert COSE-serialized ECDSA signature to DER-encoded signature.
  *
- * \param[in] key_len         Size of the key in bytes -- governs sig size.
+ * \param[in] key_evp         Key that will be used to verify the signature.
  * \param[in] cose_signature  The COSE-serialized signature.
  * \param[in] buffer          Place to write DER-format signature.
  * \param[out] der_signature  The returned DER-encoded signature
@@ -828,7 +856,6 @@ Done2:
 enum t_cose_err_t
 t_cose_crypto_verify(const int32_t                cose_algorithm_id,
                      const struct t_cose_key      verification_key,
-                     const struct q_useful_buf_c  kid,
                      void                        *crypto_context,
                      const struct q_useful_buf_c  hash_to_verify,
                      const struct q_useful_buf_c  cose_signature)
@@ -849,10 +876,6 @@ t_cose_crypto_verify(const int32_t                cose_algorithm_id,
      * whether an RSA or ECDSA signature is used
      */
     struct q_useful_buf_c  openssl_signature;
-
-    /* This implementation doesn't use any key store with the ability
-     * to look up a key based on kid. */
-    (void)kid;
 
     (void)crypto_context; /* This crypto adaptor doesn't use this */
 
@@ -969,7 +992,6 @@ t_cose_crypto_hash_start(struct t_cose_crypto_hash *hash_ctx,
         return T_COSE_ERR_HASH_GENERAL_FAIL;
     }
 
-    hash_ctx->cose_hash_alg_id = cose_hash_alg_id;
     hash_ctx->update_error = 1; /* 1 is success in OpenSSL */
 
     return T_COSE_SUCCESS;
@@ -1023,59 +1045,151 @@ t_cose_crypto_hash_finish(struct t_cose_crypto_hash *hash_ctx,
     return ossl_result ? T_COSE_SUCCESS : T_COSE_ERR_HASH_GENERAL_FAIL;
 }
 
+
+
+
+/*
+ * See documentation in t_cose_crypto.h
+ */
 enum t_cose_err_t
 t_cose_crypto_hmac_compute_setup(struct t_cose_crypto_hmac *hmac_ctx,
                                  struct t_cose_key          signing_key,
                                  const int32_t              cose_alg_id)
 {
-    (void)hmac_ctx;
-    (void)signing_key;
-    (void)cose_alg_id;
-    return T_COSE_ERR_UNSUPPORTED_SIGNING_ALG;
+    int                         ossl_result;
+    const EVP_MD               *message_digest;
+    Q_USEFUL_BUF_MAKE_STACK_UB( key_buf, T_COSE_CRYPTO_HMAC_MAX_KEY);
+    struct q_useful_buf_c       key_bytes;
+    enum t_cose_err_t           result;
+
+    message_digest = cose_hmac_alg_to_ossl(cose_alg_id);
+    if(message_digest == NULL) {
+        return T_COSE_ERR_UNSUPPORTED_HMAC_ALG;
+    }
+
+    result = t_cose_crypto_export_symmetric_key(signing_key, /* in: key to export */
+                                                key_buf,     /* in: buffer to write to */
+                                               &key_bytes); /* out: exported key */
+    if(result != T_COSE_SUCCESS) {
+        /* This happens when the key is bigger than T_COSE_CRYPTO_HMAC_MAX_KEY */
+        return T_COSE_ERR_UNSUPPORTED_KEY_LENGTH;
+    }
+
+    hmac_ctx->evp_ctx = EVP_MD_CTX_new();
+    if(hmac_ctx->evp_ctx == NULL) {
+        return T_COSE_ERR_INSUFFICIENT_MEMORY;
+    }
+
+    /* The cast from size_t to int is safe because t_cose_crypto_export_symmetric_key()
+     * will never return a key larger than T_COSE_CRYPTO_HMAC_MAX_KEY because
+     * that is the size of its input buffer as defined above/here. */
+    hmac_ctx->evp_pkey = EVP_PKEY_new_mac_key(EVP_PKEY_HMAC,       /* in: type */
+                                              NULL,                /* in: engine */
+                                              key_bytes.ptr,       /* in: key */
+                                              (int)key_bytes.len); /* in: keylen */
+    if(hmac_ctx->evp_pkey == NULL) {
+        EVP_MD_CTX_free(hmac_ctx->evp_ctx);
+        return T_COSE_ERR_INSUFFICIENT_MEMORY;
+    }
+
+    /* EVP_MAC is not used because it is not available in OpenSSL 1.1. */
+
+    ossl_result = EVP_DigestSignInit(hmac_ctx->evp_ctx, /* in: ctx -- EVP Context to initialize */
+                                     NULL,  /* in/out: pctx */
+                                     message_digest, /* in: type Digest function/type/algorithm */
+                                     NULL,  /* in: Engine -- not used */
+                                     hmac_ctx->evp_pkey); /* in: pkey -- the HMAC key */
+    if(ossl_result != 1) {
+        EVP_MD_CTX_free(hmac_ctx->evp_ctx);
+        return T_COSE_ERR_HMAC_GENERAL_FAIL;
+    }
+
+    return T_COSE_SUCCESS;
 }
 
+
+/*
+ * See documentation in t_cose_crypto.h
+ */
 enum t_cose_err_t
 t_cose_crypto_hmac_update(struct t_cose_crypto_hmac *hmac_ctx,
                           struct q_useful_buf_c      payload)
 {
-    (void)hmac_ctx;
-    (void)payload;
-    return T_COSE_ERR_UNSUPPORTED_SIGNING_ALG;
+    int  ossl_result;
+
+    ossl_result = EVP_DigestSignUpdate(hmac_ctx->evp_ctx, payload.ptr, payload.len);
+    if(ossl_result != 1) {
+        return T_COSE_ERR_HMAC_GENERAL_FAIL;
+    }
+
+    return T_COSE_SUCCESS;
 }
 
+
+/*
+ * See documentation in t_cose_crypto.h
+ */
 enum t_cose_err_t
 t_cose_crypto_hmac_compute_finish(struct t_cose_crypto_hmac *hmac_ctx,
                                   struct q_useful_buf        tag_buf,
                                   struct q_useful_buf_c     *tag)
 {
-    (void)hmac_ctx;
-    (void)tag_buf;
-    (void)tag;
-    return T_COSE_ERR_UNSUPPORTED_SIGNING_ALG;
+    int    ossl_result;
+    size_t in_out_len;
+
+    in_out_len = tag_buf.len;
+    ossl_result = EVP_DigestSignFinal(hmac_ctx->evp_ctx, tag_buf.ptr, &in_out_len);
+
+    EVP_MD_CTX_free(hmac_ctx->evp_ctx);
+    EVP_PKEY_free(hmac_ctx->evp_pkey);
+
+    if(ossl_result != 1) {
+        return T_COSE_ERR_HMAC_GENERAL_FAIL;
+    }
+
+    tag->ptr = tag_buf.ptr;
+    tag->len = in_out_len;
+
+    return T_COSE_SUCCESS;
 }
 
+
+/*
+ * See documentation in t_cose_crypto.h
+ */
+// TODO: argument order alignment with t_cose_crypto_hmac_compute_setup
 enum t_cose_err_t
 t_cose_crypto_hmac_validate_setup(struct t_cose_crypto_hmac *hmac_ctx,
                                   const  int32_t             cose_alg_id,
                                   struct t_cose_key          validation_key)
 {
-    (void)hmac_ctx;
-    (void)cose_alg_id;
-    (void)validation_key;
-    return T_COSE_ERR_UNSUPPORTED_SIGNING_ALG;
+    return t_cose_crypto_hmac_compute_setup(hmac_ctx, validation_key, cose_alg_id);
 }
 
+
+/*
+ * See documentation in t_cose_crypto.h
+ */
 enum t_cose_err_t
 t_cose_crypto_hmac_validate_finish(struct t_cose_crypto_hmac *hmac_ctx,
-                                   struct q_useful_buf_c      tag)
+                                   struct q_useful_buf_c      input_tag)
 {
-    (void)hmac_ctx;
-    (void)tag;
-    return T_COSE_ERR_UNSUPPORTED_SIGNING_ALG;
+    Q_USEFUL_BUF_MAKE_STACK_UB( tag_buf, T_COSE_CRYPTO_HMAC_TAG_MAX_SIZE);
+    struct q_useful_buf_c       computed_tag;
+    enum t_cose_err_t           result;
+
+    result = t_cose_crypto_hmac_compute_finish(hmac_ctx, tag_buf, &computed_tag);
+    if(result != T_COSE_SUCCESS) {
+        return result;
+    }
+
+    if(q_useful_buf_compare(computed_tag, input_tag)) {
+        return T_COSE_ERR_HMAC_VERIFY;
+    }
+
+    return T_COSE_SUCCESS;
 }
 
-
-#ifndef T_COSE_DISABLE_EDDSA
 
 /*
  * See documentation in t_cose_crypto.h
@@ -1146,7 +1260,6 @@ Done:
  */
 enum t_cose_err_t
 t_cose_crypto_verify_eddsa(struct t_cose_key     verification_key,
-                           struct q_useful_buf_c kid,
                            void                 *crypto_context,
                            struct q_useful_buf_c tbs,
                            struct q_useful_buf_c signature)
@@ -1155,10 +1268,6 @@ t_cose_crypto_verify_eddsa(struct t_cose_key     verification_key,
     int               ossl_result;
     EVP_MD_CTX       *verify_context = NULL;
     EVP_PKEY         *verification_key_evp;
-
-    /* This implementation doesn't use any key store with the ability
-     * to look up a key based on kid. */
-    (void)kid;
 
     (void)crypto_context; /* This crypto adaptor doesn't use this */
 
@@ -1211,7 +1320,6 @@ Done:
     return return_value;
 }
 
-#endif /* T_COSE_DISABLE_EDDSA */
 
 
 /*
@@ -1300,6 +1408,69 @@ t_cose_crypto_free_symmetric_key(struct t_cose_key key)
 {
     (void)key;
     /* Nothing to do for OpenSSL symmetric keys. */
+}
+
+
+/*
+ * See documentation in t_cose_crypto.h
+ */
+enum t_cose_err_t
+t_cose_crypto_generate_ec_key(const int32_t       cose_ec_curve_id,
+                              struct t_cose_key  *key)
+{
+    EC_KEY   *ec_key;
+    int       ossl_result;
+    int       nid;
+    EC_GROUP *ec_group;
+    EVP_PKEY *evp_pkey;
+
+    switch (cose_ec_curve_id) {
+        case T_COSE_ELLIPTIC_CURVE_P_256:
+             nid        = NID_X9_62_prime256v1;
+             break;
+        case T_COSE_ELLIPTIC_CURVE_P_384:
+             nid        = NID_secp384r1;
+             break;
+        case T_COSE_ELLIPTIC_CURVE_P_521:
+             nid        = NID_secp521r1;
+             break;
+        default:
+             return T_COSE_ERR_UNSUPPORTED_ELLIPTIC_CURVE_ALG;
+    }
+
+    ec_key = EC_KEY_new();
+    if(ec_key == NULL) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    ec_group = EC_GROUP_new_by_curve_name(nid);
+    if(ec_group == NULL) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    ossl_result = EC_KEY_set_group(ec_key, ec_group);
+    if(ossl_result != 1) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    ossl_result = EC_KEY_generate_key(ec_key);
+    if(ossl_result != 1) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    evp_pkey = EVP_PKEY_new();
+    if(evp_pkey == NULL) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    ossl_result = EVP_PKEY_set1_EC_KEY(evp_pkey, ec_key);
+    if(ossl_result != 1) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    key->key.ptr = evp_pkey;
+
+    return T_COSE_SUCCESS;
 }
 
 
@@ -1922,7 +2093,7 @@ t_cose_crypto_kw_unwrap(int32_t                 algorithm_id,
 
     /* Check for space in the output buffer */
     expected_unwrapped_size = ciphertext.len - 8;
-    if(plaintext_buffer.len <= expected_unwrapped_size) {
+    if(plaintext_buffer.len < expected_unwrapped_size) {
         return T_COSE_ERR_TOO_SMALL;
     }
 
@@ -1956,6 +2127,69 @@ t_cose_crypto_kw_unwrap(int32_t                 algorithm_id,
 #endif /* !T_COSE_DISABLE_KEYWRAP */
 
 
+
+
+/*
+ * See documentation in t_cose_crypto.h
+ */
+enum t_cose_err_t
+t_cose_crypto_ecdh(struct t_cose_key      private_key,
+                   struct t_cose_key      public_key,
+                   struct q_useful_buf    shared_key_buf,
+                   struct q_useful_buf_c *shared_key)
+{
+    int           ossl_status;
+    EVP_PKEY_CTX *ctx;
+    size_t        shared_key_len;
+
+    ctx = EVP_PKEY_CTX_new((EVP_PKEY *)private_key.key.ptr, /* in: pkey */
+                           NULL);                           /* in: engine */
+    if(ctx == NULL) {
+        return T_COSE_ERR_FAIL; // TODO error code
+    }
+
+    /* Pretty sure EVP_PKEY_derive works with finite-field
+     * DH in addition to ECDH, but that is not made
+     * use of here. If finite-field DH is needed,
+     * maybe this here implementation can be wrapped
+     * by an inline function named t_cose_crypto_ffdh()
+     */
+
+    ossl_status = EVP_PKEY_derive_init(ctx);
+    if(ossl_status != 1) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    ossl_status = EVP_PKEY_derive_set_peer(ctx,
+                                           (EVP_PKEY *)public_key.key.ptr);
+    if(ossl_status != 1) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+
+    ossl_status = EVP_PKEY_derive(ctx, NULL, &shared_key_len);
+    if(ossl_status != 1) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+    if(shared_key_len > shared_key_buf.len) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+    ossl_status = EVP_PKEY_derive(ctx, shared_key_buf.ptr, &shared_key_len);
+    if(ossl_status != 1) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    shared_key->ptr = shared_key_buf.ptr;
+    shared_key->len = shared_key_len;
+
+    EVP_PKEY_CTX_free(ctx);
+
+    return T_COSE_SUCCESS;
+}
+
+
+
+
 #include "openssl/kdf.h"
 
 
@@ -1964,11 +2198,11 @@ t_cose_crypto_kw_unwrap(int32_t                 algorithm_id,
  * See documentation in t_cose_crypto.h
  */
 enum t_cose_err_t
-t_cose_crypto_hkdf(int32_t                cose_hash_algorithm_id,
-                   struct q_useful_buf_c  salt,
-                   struct q_useful_buf_c  ikm,
-                   struct q_useful_buf_c  info,
-                   struct q_useful_buf    okm_buffer)
+t_cose_crypto_hkdf(const int32_t               cose_hash_algorithm_id,
+                   const struct q_useful_buf_c salt,
+                   const struct q_useful_buf_c ikm,
+                   const struct q_useful_buf_c info,
+                   const struct q_useful_buf   okm_buffer)
 {
     int               ossl_result;
     EVP_PKEY_CTX     *ctx;
@@ -2012,6 +2246,12 @@ t_cose_crypto_hkdf(int32_t                cose_hash_algorithm_id,
         goto Done1;
     }
 
+    /* See comment above in configure_pkey_context(). The following
+     * OpenSSL APIs should have the argments declared as const, but
+     * they are not so this pragma is necessary t_cose can compile
+     * with "-Wcast-qual". */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-qual"
     ossl_result = EVP_PKEY_CTX_set_hkdf_md(ctx, message_digest);
     if(ossl_result != 1) {
         return_value = T_COSE_ERR_HKDF_FAIL;
@@ -2038,6 +2278,7 @@ t_cose_crypto_hkdf(int32_t                cose_hash_algorithm_id,
         return_value = T_COSE_ERR_HKDF_FAIL;
         goto Done1;
     }
+#pragma GCC diagnostic pop
 
     ossl_result = EVP_PKEY_derive(ctx,
                                   okm_buffer.ptr,
@@ -2056,3 +2297,240 @@ Done2:
     return return_value;
 }
 
+
+
+
+/*
+ * See documentation in t_cose_crypto.h
+ */
+enum t_cose_err_t
+t_cose_crypto_import_ec2_pubkey(const int32_t               cose_ec_curve_id,
+                                const struct q_useful_buf_c x_coord,
+                                const struct q_useful_buf_c y_coord,
+                                const bool                  y_bool,
+                                struct t_cose_key          *key_handle)
+{
+    int                       ossl_result;
+    int                       nid;
+    EC_POINT                 *ec_point;
+    EC_KEY                   *ec_key;
+    EC_GROUP                 *ec_group;
+    EVP_PKEY                 *evp_pkey;
+    uint8_t                   first_byte;
+    UsefulOutBuf_MakeOnStack( import_buf, T_COSE_EXPORT_PUBLIC_KEY_MAX_SIZE);
+    struct q_useful_buf_c     import_octets;
+
+    switch (cose_ec_curve_id) {
+        case T_COSE_ELLIPTIC_CURVE_P_256:
+             nid  = NID_X9_62_prime256v1;
+             break;
+        case T_COSE_ELLIPTIC_CURVE_P_384:
+             nid  = NID_secp384r1;
+             break;
+        case T_COSE_ELLIPTIC_CURVE_P_521:
+             nid  = NID_secp521r1;
+             break;
+        /* The only other registered for EC2 is secp256k1 */
+        default:
+             return T_COSE_ERR_UNSUPPORTED_ELLIPTIC_CURVE_ALG;
+    }
+
+
+    /* This converts to a serialized representation of an EC Point
+     * described in
+     * Certicom Research, "SEC 1: Elliptic Curve Cryptography", Standards for
+     * Efficient Cryptography, May 2009, <https://www.secg.org/sec1-v2.pdf>.
+     * The description is very mathematical and hard to read for us
+     * coder types. It was much easier to understand reading Jim's
+     * COSE-C implementation. See mbedtls_ecp_keypair() in COSE-C.
+     *
+     * This string is the format used by Mbed TLS to import an EC
+     * public key.
+     *
+     * This does implement point compression. The patents for it have
+     * run out so it's OK to implement. Point compression is commented
+     * out in Jim's implementation, presumably because of the patent
+     * issue.
+     *
+     * A simple English description of the format is this. The first
+     * byte is 0x04 for no point compression and 0x02 or 0x03 if there
+     * is point compression. 0x02 indicates a positive y and 0x03 a
+     * negative y (or is the other way). Following the first byte
+     * are the octets of x. If the first byte is 0x04 then following
+     * x is the y value.
+     *
+     * UsefulOutBut is used to safely construct this string.
+     */
+    if(q_useful_buf_c_is_null(y_coord)) {
+        /* This is point compression */
+        first_byte = y_bool ? 0x02 : 0x03;
+    } else {
+        /* Uncompressed */
+        first_byte = 0x04;
+    }
+    UsefulOutBuf_AppendByte(&import_buf, first_byte);
+    UsefulOutBuf_AppendUsefulBuf(&import_buf, x_coord);
+    if(first_byte == 0x04) {
+        UsefulOutBuf_AppendUsefulBuf(&import_buf, y_coord);
+    }
+    import_octets = UsefulOutBuf_OutUBuf(&import_buf);
+
+
+    ec_key = EC_KEY_new();
+    if(ec_key == NULL) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    ec_group = EC_GROUP_new_by_curve_name(nid);
+    if(ec_group == NULL) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    // TODO: this and related are to be depreacted, so they say...
+    ossl_result = EC_KEY_set_group(ec_key, ec_group);
+    if(ossl_result != 1) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    ec_point = EC_POINT_new(ec_group);
+    if(ec_point == NULL) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    ossl_result = EC_POINT_oct2point(ec_group,
+                                     ec_point,
+                                     import_octets.ptr, import_octets.len,
+                                     NULL);
+    if(ossl_result != 1) {
+         return T_COSE_ERR_FAIL; // TODO: error code
+     }
+
+    ossl_result = EC_KEY_set_public_key(ec_key, ec_point);
+    if(ossl_result != 1) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    evp_pkey = EVP_PKEY_new();
+    if(evp_pkey == NULL) {
+         return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    ossl_result = EVP_PKEY_set1_EC_KEY(evp_pkey, ec_key);
+    if(ossl_result != 1) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    key_handle->key.ptr = evp_pkey;
+
+    return T_COSE_SUCCESS;
+}
+
+
+/*
+ * See documentation in t_cose_crypto.h
+ */
+enum t_cose_err_t
+t_cose_crypto_export_ec2_key(struct t_cose_key      key_handle,
+                             int32_t               *cose_ec_curve_id,
+                             struct q_useful_buf    x_coord_buf,
+                             struct q_useful_buf_c *x_coord,
+                             struct q_useful_buf    y_coord_buf,
+                             struct q_useful_buf_c *y_coord,
+                             bool                  *y_bool)
+{
+    EC_KEY               *ec_key;
+    const EC_POINT       *ec_point;
+    const EC_GROUP       *ec_group;
+    uint8_t               export_buf[T_COSE_EXPORT_PUBLIC_KEY_MAX_SIZE];
+    size_t                export_len;
+    struct q_useful_buf_c export;
+    uint8_t               first_byte;
+    size_t                len;
+
+    ec_key = EVP_PKEY_get1_EC_KEY((EVP_PKEY *)key_handle.key.ptr);
+    if(ec_key == NULL) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    ec_point = EC_KEY_get0_public_key(ec_key);
+    if(ec_point == NULL) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    ec_group = EC_KEY_get0_group(ec_key);
+    if(ec_group == NULL) {
+        return T_COSE_ERR_FAIL;
+    }
+
+    /* TODO: add support for compressed? */
+    export_len = EC_POINT_point2oct(ec_group, /* in: group */
+                                    ec_point, /* in: point */
+                                    POINT_CONVERSION_UNCOMPRESSED, /* in: point conversion form */
+                                    export_buf, /* in/out: buffer to output to */
+                                    sizeof(export_buf), /* in: */
+                                    NULL /* in: BN_CTX */
+                                   );
+
+    first_byte = export_buf[0];
+    export = (struct q_useful_buf_c){export_buf+1, export_len-1};
+
+    /* export_buf is one first byte, the x-coord and maybe the y-coord
+     * per SEC1.
+     */
+
+    switch(EC_GROUP_get_curve_name(ec_group)) {
+        case NID_X9_62_prime256v1:
+            *cose_ec_curve_id = T_COSE_ELLIPTIC_CURVE_P_256;
+            break;
+        case NID_secp384r1:
+            *cose_ec_curve_id = T_COSE_ELLIPTIC_CURVE_P_384;
+            break;
+        case NID_secp521r1:
+            *cose_ec_curve_id = T_COSE_ELLIPTIC_CURVE_P_521;
+            break;
+        /* The only other registered for EC2 is secp256k1 */
+        default:
+            return T_COSE_ERR_FAIL;
+    }
+
+    switch(first_byte) {
+        case 0x04:
+            /* uncompressed */
+            len      = (export_len - 1 ) / 2;
+            *y_coord = UsefulBuf_Copy(y_coord_buf, UsefulBuf_Tail(export, len));
+            if(q_useful_buf_c_is_null(*y_coord)) {
+                return T_COSE_ERR_FAIL;
+            }
+            break;
+
+        case 0x02:
+            /* compressed */
+            len      = export_len - 1;
+            *y_coord = NULL_Q_USEFUL_BUF_C;
+            *y_bool  = true;
+            break;
+
+        case 0x03:
+            /* compressed */
+            len      = export_len - 1;
+            *y_coord = NULL_Q_USEFUL_BUF_C;
+            *y_bool  = false;
+            break;
+
+        default:
+            return T_COSE_ERR_FAIL;
+    }
+    *x_coord = UsefulBuf_Copy(x_coord_buf, UsefulBuf_Head(export, len));
+    if(q_useful_buf_c_is_null(*x_coord)) {
+        return T_COSE_ERR_FAIL;
+    }
+
+    return T_COSE_SUCCESS;
+}
+
+
+void
+t_cose_crypto_free_ec_key(struct t_cose_key key_handle)
+{
+    EVP_PKEY_free(key_handle.key.ptr);
+}

@@ -2,7 +2,7 @@
  *  t_cose_util.h
  *
  * Copyright 2019-2023, Laurence Lundblade
- * Copyright (c) 2020-2022, Arm Limited. All rights reserved.
+ * Copyright (c) 2020-2023, Arm Limited. All rights reserved.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  *
@@ -15,6 +15,8 @@
 
 #include <stdint.h>
 #include "qcbor/qcbor_common.h" /* For QCBORError */
+#include "qcbor/qcbor_encode.h"
+#include "qcbor/qcbor_decode.h"
 #include "t_cose/q_useful_buf.h"
 #include "t_cose/t_cose_common.h"
 
@@ -28,6 +30,48 @@ extern "C" {
  * \brief Utility functions used internally by the t_cose implementation.
  *
  */
+
+
+
+
+/*
+ * \brief Process CBOR tag numbers and figure out message type.
+ *
+ * \param[in] relevant_cose_tag_nums  List of tag numbers relevant for
+ *                                    message type being processed, ending
+ *                                    with \ref CBOR_TAG_INVALID64
+ * \param[in] option_flags            Flags passed to xxxx_init() that
+ *                                    say how to process tag nums, plus
+ *                                    optional default message type.
+ * \param[in] item                    The QCBORItem of the array that
+ *                                    opens the message so the tag
+ *                                    numbers on it can be processed.
+ * \param[in] cbor_decoder            Needed to process the tag numbers
+ *                                    on item.
+ * \param[out] unprocessed_tag_nums   Any additional tag numbers that were
+ *                                    not used to determine the message
+ *                                    type.
+ * \param[out] cost_tag_num           The end result message type.
+ *
+ * Either this will error out or \c cose_tag_num will identify the
+ * message type and be one of those listed in \c relevant_cose_tag_nums.
+ * This also puts any additional tag numbers that are not the
+ * one returned in \c cose_tag_num in \c unprocessed_tag_nums. This
+ * genric processor can be used for all the CBOR message types with
+ * tag numbers (e.g., COSE_Sign1, COSE_Encrypt,...)
+ *
+ * \c option_flags are a critical input. It may contain the
+ * tag number of the expected type and option flags that say
+ * how the tag numbers are to be interpreted and error conditions.
+ */
+enum t_cose_err_t
+t_cose_tags_and_type(const uint64_t     *relevant_cose_tag_nums,
+                     uint32_t            option_flags,
+                     const QCBORItem    *item,
+                     QCBORDecodeContext *cbor_decoder,
+                     uint64_t            unprocessed_tag_nums[T_COSE_MAX_TAGS_TO_RETURN],
+                     uint64_t           *cose_tag_num);
+
 
 
 /**
@@ -92,11 +136,26 @@ extern "C" {
  */
 int32_t hash_alg_id_from_sig_alg_id(int32_t cose_algorithm_id);
 
+
+/**
+ * \brief Returns the key length (in bits) of a given encryption algo.
+ *
+ * @param cose_algorithm_id  Crypto algorithm.
+ *
+ * Returns the key length (in bits) or UINT_MAX in case of an
+ * unknown algorithm id.
+ */
+uint32_t
+bits_in_crypto_alg(int32_t cose_algorithm_id);
+
+
+
 /**
  * \brief Create the ToBeMaced (TBM) structure bytes for COSE.
  *
- * \param[in] tbm_first_part_buf  The buffer to contain the first part
- * \param[in] sign_inputs    The input to be mac'd -- payload, aad, protected headers.
+ * \param[in] mac_inputs          The input to be mac'd -- payload, aad,
+ *                                protected headers.
+ * \param[in]  tbm_first_part_buf The buffer to contain the first part.
  * \param[out] tbm_first_part     Pointer and length of buffer into which
  *                                the resulting TBM is put.
  *
@@ -110,7 +169,7 @@ int32_t hash_alg_id_from_sig_alg_id(int32_t cose_algorithm_id);
  * \retval T_COSE_ERR_HASH_GENERAL_FAIL
  *         In case of some general hash failure.
  */
-enum t_cose_err_t create_tbm(const struct t_cose_sign_inputs *sign_inputs,
+enum t_cose_err_t create_tbm(const struct t_cose_sign_inputs *mac_inputs,
                              struct q_useful_buf              tbm_first_part_buf,
                              struct q_useful_buf_c           *tbm_first_part);
 
@@ -118,7 +177,7 @@ enum t_cose_err_t create_tbm(const struct t_cose_sign_inputs *sign_inputs,
 /**
  * Serialize the to-be-signed (TBS) bytes for COSE.
  *
- * \param[in] sign_inputs               The payload, AAD and header params to hash.
+ * \param[in] sign_inputs           The payload, AAD and header params to hash.
  * \param[in] buffer_for_tbs        Pointer and length of buffer into which
  *                                  the resulting TBS bytes is put.
  * \param[out] tbs                  Pointer and length of the
@@ -154,7 +213,7 @@ enum t_cose_err_t create_tbs(const struct t_cose_sign_inputs *sign_inputs,
  * \return This returns one of the error codes defined by \ref t_cose_err_t.
  * \retval T_COSE_ERR_UNSUPPORTED_HASH
  *         If the hash algorithm is not known.
- * \retval T_COSE_ERR_HASH_BUFFER_SIZE  
+ * \retval T_COSE_ERR_HASH_BUFFER_SIZE
  *         \c buffer_for_tbs is too small.
  * \retval T_COSE_ERR_HASH_GENERAL_FAIL
  *         In case of some general hash failure.
@@ -194,6 +253,22 @@ create_enc_structure(const char             *context_string,
                      struct q_useful_buf_c  *enc_structure);
 
 
+/*
+ * Create the KDF context info structure for ESDH content key
+ * distribution as described RFC 9053 section 5. This doesn't allow
+ * for filling in some fields like pary U/V nonce. The prevelance of
+ * good RNGs makes them less important. They are filled in as NULLs in
+ * compliance with RFC 9053.
+ */
+enum t_cose_err_t
+create_kdf_context_info(const struct t_cose_alg_and_bits  next_alg,
+                        const struct q_useful_buf_c       party_u_identity,
+                        const struct q_useful_buf_c       party_v_identity,
+                        const struct q_useful_buf_c       protected_headers,
+                        const struct q_useful_buf_c       supp_pub_other,
+                        const struct q_useful_buf_c       supp_priv_info,
+                        const struct q_useful_buf         buffer_for_info,
+                        struct q_useful_buf_c            *kdf_context_info);
 
 
 #ifndef T_COSE_DISABLE_SHORT_CIRCUIT_SIGN
@@ -227,7 +302,7 @@ create_enc_structure(const char             *context_string,
  *
  */
 struct q_useful_buf_c get_short_circuit_kid(void);
-#endif
+#endif /* !T_COSE_DISABLE_SHORT_CIRCUIT_SIGN */
 
 
 /**
@@ -240,6 +315,10 @@ struct q_useful_buf_c get_short_circuit_kid(void);
  */
 enum t_cose_err_t
 qcbor_decode_error_to_t_cose_error(QCBORError qcbor_error, enum t_cose_err_t format_error);
+
+
+enum t_cose_err_t
+qcbor_encode_error_to_t_cose_error(QCBOREncodeContext *cbor_encoder);
 
 
 /**
@@ -261,7 +340,7 @@ t_cose_check_list(int32_t cose_algorithm_id, const int32_t *list);
 /**
  * \brief Map a 16-bit integer like an error code to another.
  *
- * \param[in] map   Two-dimentional array that is the mapping.
+ * \param[in] map    Two-dimentional array that is the mapping.
  * \param[in] query  The input to map
  *
  * \returns The output of the mapping.

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2023, Laurence Lundblade. All rights reserved.
- * Copyright (c) 2020-2022, Arm Limited. All rights reserved.
+ * Copyright (c) 2020-2023, Arm Limited. All rights reserved.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  *
@@ -16,61 +16,14 @@
 /**
  * \file t_cose_mac_compute.c
  *
- * \brief This creates t_cose Mac authentication structure without a recipient
+ * \brief This creates t_cose MAC authentication structure without a recipient
  *        structure.
  *        Only HMAC is supported so far.
  */
 
-#ifndef T_COSE_DISABLE_MAC0
-
-enum t_cose_err_t
-t_cose_mac_compute_private(struct t_cose_mac_calculate_ctx *context,
-                           bool                             payload_is_detached,
-                           struct q_useful_buf_c            aad,
-                           struct q_useful_buf_c            payload,
-                           struct q_useful_buf              out_buf,
-                           struct q_useful_buf_c           *result)
-{
-    (void)aad;
-    QCBOREncodeContext  encode_ctx;
-    enum t_cose_err_t   return_value;
-
-    /* -- Initialize CBOR encoder context with output buffer -- */
-    QCBOREncode_Init(&encode_ctx, out_buf);
-
-    /* -- Output the header parameters into the encoder context -- */
-    return_value = t_cose_mac_encode_parameters(context, &encode_ctx);
-    if(return_value != T_COSE_SUCCESS) {
-        goto Done;
-    }
-
-    if(payload_is_detached) {
-        /* detached payload:
-         * the payload should be transfered in another channel
-         */
-        QCBOREncode_AddNULL(&encode_ctx);
-    } else {
-        /* --- Get started on the payload --- */
-        QCBOREncode_AddBytes(&encode_ctx, payload);
-    }
-
-    return_value = t_cose_mac_encode_tag(context, payload, &encode_ctx);
-    if(return_value) {
-        goto Done;
-    }
-
-    /* -- Close off and get the resulting encoded CBOR -- */
-    if(QCBOREncode_Finish(&encode_ctx, result)) {
-        return_value = T_COSE_ERR_CBOR_NOT_WELL_FORMED;
-        goto Done;
-    }
-
-Done:
-    return return_value;
-}
 
 /*
- * Public function. See t_cose_mac.h
+ * Public function. See t_cose_mac_compute.h
  */
 enum t_cose_err_t
 t_cose_mac_encode_parameters(struct t_cose_mac_calculate_ctx *me,
@@ -79,6 +32,7 @@ t_cose_mac_encode_parameters(struct t_cose_mac_calculate_ctx *me,
     size_t                  tag_len;
     enum t_cose_err_t       return_value;
     struct t_cose_parameter param_storage[2];
+    struct t_cose_parameter *p_tmp;
 
     /*
      * Check the algorithm now by getting the algorithm as an early
@@ -94,18 +48,22 @@ t_cose_mac_encode_parameters(struct t_cose_mac_calculate_ctx *me,
         QCBOREncode_AddTag(cbor_encode_ctx, CBOR_TAG_COSE_MAC0);
     }
 
-    /* Get started with the tagged array that holds the parts of
-     * a COSE_Mac0 message
+    /*
+     * Get started with the tagged array that holds the
+     * parts of a COSE_Mac0 message
      */
     QCBOREncode_OpenArray(cbor_encode_ctx);
 
-    param_storage[0] = t_cose_make_alg_id_parameter(me->cose_algorithm_id);
-    param_storage[1] = t_cose_make_kid_parameter(me->kid);
-    param_storage[0].next = &param_storage[1];
+    param_storage[0] = t_cose_param_make_alg_id(me->cose_algorithm_id);
+    if (!q_useful_buf_c_is_null(me->kid)) {
+        param_storage[1] = t_cose_param_make_kid(me->kid);
+        param_storage[0].next = &param_storage[1];
+    }
+    p_tmp = &param_storage[0];
 
-    t_cose_parameter_list_append(&param_storage[0], me->added_body_parameters);
+    t_cose_params_append(&p_tmp, me->added_body_parameters);
 
-    return_value = t_cose_encode_headers(cbor_encode_ctx,
+    return_value = t_cose_headers_encode(cbor_encode_ctx,
                                          &param_storage[0],
                                          &me->protected_parameters);
 
@@ -119,11 +77,11 @@ t_cose_mac_encode_parameters(struct t_cose_mac_calculate_ctx *me,
 }
 
 /*
- * Public function. See t_cose_mac.h
+ * Public function. See t_cose_mac_compute.h
  */
 enum t_cose_err_t
 t_cose_mac_encode_tag(struct t_cose_mac_calculate_ctx *me,
-                      struct q_useful_buf_c            maced_payload,
+                      struct q_useful_buf_c            payload,
                       QCBOREncodeContext              *cbor_encode_ctx)
 {
     enum t_cose_err_t            return_value;
@@ -138,9 +96,10 @@ t_cose_mac_encode_tag(struct t_cose_mac_calculate_ctx *me,
     Q_USEFUL_BUF_MAKE_STACK_UB(  tbm_first_part_buf,
                                  T_COSE_SIZE_OF_TBM);
     struct t_cose_crypto_hmac    hmac_ctx;
-    struct t_cose_sign_inputs    sign_input;
+    struct t_cose_sign_inputs    mac_input;
 
-    /* Check that there are no CBOR encoding errors before proceeding
+    /*
+     * Check that there are no CBOR encoding errors before proceeding
      * with hashing and tagging. This is not actually necessary as the
      * errors will be caught correctly later, but it does make it a
      * bit easier for the caller to debug problems.
@@ -163,15 +122,16 @@ t_cose_mac_encode_tag(struct t_cose_mac_calculate_ctx *me,
         goto CloseArray;
     }
 
-    /* Create the hash of the ToBeMaced bytes. Inputs to the
+    /*
+     * Create the hash of the ToBeMaced bytes. Inputs to the
      * MAC are the protected parameters, the payload that is
      * getting MACed.
      */
-    sign_input.aad = NULL_Q_USEFUL_BUF_C; // TODO: this won't be NULL when AAD is supported
-    sign_input.payload = maced_payload;
-    sign_input.body_protected = me->protected_parameters;
-    sign_input.sign_protected = NULL_Q_USEFUL_BUF_C; /* Never sign-protected for MAC */
-    return_value = create_tbm(&sign_input,
+    mac_input.aad = NULL_Q_USEFUL_BUF_C; // TODO: this won't be NULL when AAD is supported
+    mac_input.payload = payload;
+    mac_input.body_protected = me->protected_parameters;
+    mac_input.sign_protected = NULL_Q_USEFUL_BUF_C; /* Never sign-protected for MAC */
+    return_value = create_tbm(&mac_input,
                               tbm_first_part_buf,
                               &tbm_first_part);
     if(return_value) {
@@ -184,7 +144,7 @@ t_cose_mac_encode_tag(struct t_cose_mac_calculate_ctx *me,
      * payload, to save a bigger buffer containing the entire ToBeMaced.
      */
     return_value = t_cose_crypto_hmac_compute_setup(&hmac_ctx,
-                                                    me->signing_key,
+                                                    me->mac_key,
                                                     me->cose_algorithm_id);
     if(return_value) {
         goto Done;
@@ -202,7 +162,7 @@ t_cose_mac_encode_tag(struct t_cose_mac_calculate_ctx *me,
      * It is assumed that the context payload has been wrapped in a byte
      * string in CBOR format.
      */
-    return_value = t_cose_crypto_hmac_update(&hmac_ctx, maced_payload);
+    return_value = t_cose_crypto_hmac_update(&hmac_ctx, payload);
     if(return_value) {
         goto Done;
     }
@@ -225,11 +185,49 @@ Done:
     return return_value;
 }
 
-#else /* !T_COSE_DISABLE_MAC0 */
+/*
+ * Semi-private function. See t_cose_mac_compute.h
+ */
+enum t_cose_err_t
+t_cose_mac_compute_private(struct t_cose_mac_calculate_ctx *me,
+                           bool                             payload_is_detached,
+                           struct q_useful_buf_c            aad,
+                           struct q_useful_buf_c            payload,
+                           struct q_useful_buf              out_buf,
+                           struct q_useful_buf_c           *result)
+{
+    (void)aad;
+    QCBOREncodeContext  encode_ctx;
+    enum t_cose_err_t   return_value;
 
-/* So some of the build checks don't get confused by an empty object file */
-void t_cose_mac_compute_placeholder(void)
-{}
+    /* -- Initialize CBOR encoder context with output buffer -- */
+    QCBOREncode_Init(&encode_ctx, out_buf);
 
+    /* -- Output the header parameters into the encoder context -- */
+    return_value = t_cose_mac_encode_parameters(me, &encode_ctx);
+    if(return_value != T_COSE_SUCCESS) {
+        goto Done;
+    }
 
-#endif /* !T_COSE_DISABLE_MAC0 */
+    if(payload_is_detached) {
+        /* detached: the payload should be transfered in another channel */
+        QCBOREncode_AddNULL(&encode_ctx);
+    } else {
+        /* --- Get started on the payload --- */
+        QCBOREncode_AddBytes(&encode_ctx, payload);
+    }
+
+    return_value = t_cose_mac_encode_tag(me, payload, &encode_ctx);
+    if(return_value) {
+        goto Done;
+    }
+
+    /* -- Close off and get the resulting encoded CBOR -- */
+    if(QCBOREncode_Finish(&encode_ctx, result)) {
+        return_value = T_COSE_ERR_CBOR_NOT_WELL_FORMED;
+        goto Done;
+    }
+
+Done:
+    return return_value;
+}

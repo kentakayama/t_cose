@@ -2,7 +2,7 @@
  *  t_cose_util.c
  *
  * Copyright 2019-2023, Laurence Lundblade
- * Copyright (c) 2020, Arm Limited. All rights reserved.
+ * Copyright (c) 2020-2023, Arm Limited. All rights reserved.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  *
@@ -51,7 +51,7 @@ hash_alg_id_from_sig_alg_id(int32_t cose_algorithm_id)
     /* If other hashes, particularly those that output bigger hashes
      * are added here, various other parts of this code have to be
      * changed to have larger buffers, in particular
-     * \ref T_COSE_CRYPTO_MAX_HASH_SIZE.
+     * \ref T_COSE_XXX_MAX_HASH_SIZE.
      */
     // TODO: allows disabling ES256
 
@@ -111,11 +111,138 @@ hash_alg_id_from_sig_alg_id(int32_t cose_algorithm_id)
 }
 
 
-#ifndef T_COSE_DISABLE_MAC0
+
+
+static bool
+is_valid_tag_for_message(uint64_t tag_num, const uint64_t *relevant_cose_tag_nums)
+{
+    const uint64_t *l;
+
+    for(l = relevant_cose_tag_nums; *l != CBOR_TAG_INVALID64; l++) {
+        if(tag_num == *l) {
+            return true;
+        }
+    }
+    return false;
+}
+
+
+/*
+ * Public function. See t_cose_util.h
+ */
+enum t_cose_err_t
+t_cose_tags_and_type(const uint64_t     *relevant_cose_tag_nums,
+                     uint32_t            option_flags,
+                     const QCBORItem    *item,
+                     QCBORDecodeContext *cbor_decoder,
+                     uint64_t            unprocessed_tag_nums[T_COSE_MAX_TAGS_TO_RETURN],
+                     uint64_t           *cose_tag_num)
+{
+    uint64_t options_tag_num;
+    uint64_t tag_on_item;
+    bool     tag_on_item_relevant;
+    unsigned item_tag_index;
+    unsigned returned_tag_index;
+
+    options_tag_num = option_flags & T_COSE_OPT_MESSAGE_TYPE_MASK;
+    tag_on_item = QCBORDecode_GetNthTag(cbor_decoder, item, 0);
+    tag_on_item_relevant = is_valid_tag_for_message(tag_on_item,
+                                                    relevant_cose_tag_nums );
+
+
+    if((option_flags & T_COSE_OPT_TAG_REQUIRED) && !tag_on_item_relevant) {
+        /* It is required that the tag number on the COSE message say which type
+         * of COSE signed message it is.
+         */
+        return T_COSE_ERR_INCORRECTLY_TAGGED;
+    }
+
+    if((option_flags & T_COSE_OPT_TAG_PROHIBITED) && tag_on_item_relevant) {
+        /* It is required that there be no tag number on the COSE message
+         * indicating the COSE signed message type. Note that there could
+         * be other tag numbers present.
+         */
+        return T_COSE_ERR_INCORRECTLY_TAGGED;
+    }
+
+
+    if(options_tag_num != T_COSE_OPT_MESSAGE_TYPE_UNSPECIFIED) {
+        /* Override or explicit message type in options. */
+        if(!is_valid_tag_for_message(options_tag_num, relevant_cose_tag_nums)) {
+            return T_COSE_ERR_WRONG_COSE_MESSAGE_TYPE;
+        }
+        *cose_tag_num = options_tag_num;
+    } else {
+        /* Reliance on tag number on COSE message */
+        if(!tag_on_item_relevant) {
+            return T_COSE_ERR_CANT_DETERMINE_MESSAGE_TYPE;
+        }
+        *cose_tag_num = tag_on_item;
+    }
+
+
+    /* Initialize auTags, the returned tags, to CBOR_TAG_INVALID64 */
+#if CBOR_TAG_INVALID64 != 0xffffffffffffffff
+#error Initializing unprocessed_tag_nums array
+#endif
+
+    memset(unprocessed_tag_nums, 0xff, sizeof(uint64_t[T_COSE_MAX_TAGS_TO_RETURN]));
+    item_tag_index = 0;
+    returned_tag_index = 0;
+    if(tag_on_item_relevant) {
+        item_tag_index++;
+    }
+
+    while(1) {
+        tag_on_item = QCBORDecode_GetNthTag(cbor_decoder, item, item_tag_index);
+
+        item_tag_index++;
+        if(tag_on_item == CBOR_TAG_INVALID64) {
+            break;
+        }
+        if(returned_tag_index > T_COSE_MAX_TAGS_TO_RETURN) {
+            return T_COSE_ERR_TOO_MANY_TAGS;
+        }
+        unprocessed_tag_nums[returned_tag_index] = tag_on_item;
+        returned_tag_index++;
+    }
+
+    return T_COSE_SUCCESS;
+}
+
+
+
+/**
+ * \brief Returns the key length (in bits) of a given encryption algo.
+ *
+ * @param cose_algorithm_id  Crypto algorithm.
+ *
+ * Returns the key length (in bits) or UINT_MAX in case of an
+ * unknown algorithm id.
+ */
+uint32_t
+bits_in_crypto_alg(int32_t cose_algorithm_id)
+{
+    switch(cose_algorithm_id) {
+        case T_COSE_ALGORITHM_AES128CCM_16_128:
+        case T_COSE_ALGORITHM_A128KW:
+        case T_COSE_ALGORITHM_A128GCM: return 128;
+        case T_COSE_ALGORITHM_A192KW:
+        case T_COSE_ALGORITHM_A192GCM: return 192;
+        case T_COSE_ALGORITHM_AES256CCM_16_128:
+        case T_COSE_ALGORITHM_A256KW:
+        case T_COSE_ALGORITHM_A256GCM: return 256;
+        default: return UINT32_MAX;
+    }
+}
+
+
+
+
 // TODO: try to combine with create_tbs_hash so that no buffer for headers
 // is needed. Make sure it doesn't make sign-only or mac-only object code big
 enum t_cose_err_t
-create_tbm(const struct t_cose_sign_inputs *sign_inputs,
+create_tbm(const struct t_cose_sign_inputs *mac_inputs,
            struct q_useful_buf              tbm_first_part_buf,
            struct q_useful_buf_c           *tbm_first_part)
 {
@@ -126,15 +253,16 @@ create_tbm(const struct t_cose_sign_inputs *sign_inputs,
     QCBOREncode_Init(&cbor_encode_ctx, tbm_first_part_buf);
     QCBOREncode_OpenArray(&cbor_encode_ctx);
     /* context */
-    QCBOREncode_AddBytes(&cbor_encode_ctx, Q_USEFUL_BUF_FROM_SZ_LITERAL(COSE_MAC_CONTEXT_STRING_MAC0));
+    QCBOREncode_AddText(&cbor_encode_ctx, Q_USEFUL_BUF_FROM_SZ_LITERAL(COSE_MAC_CONTEXT_STRING_MAC0));
+
     /* body_protected */
-    QCBOREncode_AddBytes(&cbor_encode_ctx, sign_inputs->body_protected);
+    QCBOREncode_AddBytes(&cbor_encode_ctx, mac_inputs->body_protected);
 
     /* external_aad. There is none so an empty bstr */
     QCBOREncode_AddBytes(&cbor_encode_ctx, NULL_Q_USEFUL_BUF_C);
 
-    /* The short fake payload. */
-    QCBOREncode_AddBytesLenOnly(&cbor_encode_ctx, sign_inputs->payload);
+    /* The short fake payload, add only the byte string type and length */
+    QCBOREncode_AddBytesLenOnly(&cbor_encode_ctx, mac_inputs->payload);
 
     /* Close of the array */
     QCBOREncode_CloseArray(&cbor_encode_ctx);
@@ -150,10 +278,8 @@ create_tbm(const struct t_cose_sign_inputs *sign_inputs,
 
     return T_COSE_SUCCESS;
 }
-#endif /* !T_COSE_DISABLE_MAC0 */
 
 
-#ifndef T_COSE_DISABLE_EDDSA
 /*
  * Public function. See t_cose_util.h
  */
@@ -175,7 +301,7 @@ create_tbs(const struct t_cose_sign_inputs *sign_inputs,
     }
     QCBOREncode_AddText(&cbor_context, s1);
     QCBOREncode_AddBytes(&cbor_context, sign_inputs->body_protected);
-    if(!q_useful_buf_c_is_null(sign_inputs->sign_protected)) {
+    if(!q_useful_buf_c_is_empty(sign_inputs->sign_protected)) {
         QCBOREncode_AddBytes(&cbor_context, sign_inputs->sign_protected);
     }
     QCBOREncode_AddBytes(&cbor_context, sign_inputs->aad);
@@ -191,7 +317,6 @@ create_tbs(const struct t_cose_sign_inputs *sign_inputs,
         return T_COSE_SUCCESS;
     }
 }
-#endif /* !T_COSE_DISABLE_EDDSA */
 
 
 /**
@@ -365,6 +490,99 @@ create_enc_structure(const char            *context_string,
 }
 
 
+
+/*
+ * Encode one party info. Used twice for party U and party V.
+ */
+static void
+party_encode(QCBOREncodeContext           *cbor_encoder,
+             const struct q_useful_buf_c   party)
+{
+    QCBOREncode_OpenArray(cbor_encoder);
+    if(!q_useful_buf_c_is_null(party)) {
+        QCBOREncode_AddBytes(cbor_encoder, party);
+    } else {
+        QCBOREncode_AddNULL(cbor_encoder);
+    }
+    /* nonce and other are hard coded to NULL because they seen unneeded. */
+    QCBOREncode_AddNULL(cbor_encoder);
+    QCBOREncode_AddNULL(cbor_encoder);
+    QCBOREncode_CloseArray(cbor_encoder);
+}
+
+
+/*
+ * Public function. See t_cose_util.h
+ */
+enum t_cose_err_t
+create_kdf_context_info(const struct t_cose_alg_and_bits next_alg,
+                        const struct q_useful_buf_c      party_u_identity,
+                        const struct q_useful_buf_c      party_v_identity,
+                        const struct q_useful_buf_c      protected_headers,
+                        const struct q_useful_buf_c      supp_pub_other,
+                        const struct q_useful_buf_c      supp_priv_info,
+                        const struct q_useful_buf        buffer_for_info,
+                        struct q_useful_buf_c           *kdf_context_info)
+{
+    QCBOREncodeContext  cbor_encoder;
+    QCBORError          err;
+    enum t_cose_err_t   return_value;
+
+
+    QCBOREncode_Init(&cbor_encoder, buffer_for_info);
+    QCBOREncode_OpenArray(&cbor_encoder);
+
+    /* -----------AlgorithmID---------------*/
+    QCBOREncode_AddInt64(&cbor_encoder, next_alg.cose_alg_id);
+
+    /* -----------PartyInfo ---------------*/
+    party_encode(&cbor_encoder, party_u_identity);
+    party_encode(&cbor_encoder, party_v_identity);
+
+
+    /* -----------SuppPubInfo---------------*/
+    QCBOREncode_OpenArray(&cbor_encoder);
+
+    /* keyDataLength */
+    QCBOREncode_AddUInt64(&cbor_encoder, next_alg.bits_in_key);
+
+    /* recipients-inner.protected header */
+    QCBOREncode_AddBytes(&cbor_encoder, protected_headers);
+
+    /* other */
+    if(!q_useful_buf_c_is_null(supp_pub_other)) {
+        QCBOREncode_AddBytes(&cbor_encoder, supp_pub_other);
+    }
+
+    QCBOREncode_CloseArray(&cbor_encoder);
+
+    /* -----------SuppPrivInfo----------- */
+    if(!q_useful_buf_c_is_null(supp_priv_info)) {
+        QCBOREncode_AddBytes(&cbor_encoder, supp_priv_info);
+    }
+
+    QCBOREncode_CloseArray(&cbor_encoder);
+
+    err = QCBOREncode_Finish(&cbor_encoder, kdf_context_info);
+    switch(err) {
+        case QCBOR_SUCCESS:
+            return_value = T_COSE_SUCCESS;
+            break;
+
+        case QCBOR_ERR_BUFFER_TOO_SMALL:
+            return_value =T_COSE_ERR_KDF_CONTEXT_SIZE;
+            break;
+
+        default:
+            return_value = T_COSE_ERR_CBOR_FORMATTING;
+    }
+
+    return return_value;
+}
+
+
+
+
 #ifndef T_COSE_DISABLE_SHORT_CIRCUIT_SIGN
 /* This is a random hard coded kid (key ID) that is used to indicate
  * short-circuit signing. It is OK to hard code this as the
@@ -415,6 +633,25 @@ qcbor_decode_error_to_t_cose_error(QCBORError qcbor_error, enum t_cose_err_t for
     }
     return T_COSE_SUCCESS;
 }
+
+/*
+ * Public function. See t_cose_util.h
+ */
+enum t_cose_err_t
+qcbor_encode_error_to_t_cose_error(QCBOREncodeContext *cbor_encoder)
+{
+    switch(QCBOREncode_GetErrorState(cbor_encoder)) {
+        case QCBOR_ERR_BUFFER_TOO_SMALL:
+            return T_COSE_ERR_TOO_SMALL;
+
+        case QCBOR_SUCCESS:
+            return T_COSE_SUCCESS;
+
+        default:
+            return T_COSE_ERR_CBOR_FORMATTING;
+    }
+}
+
 
 
 /*

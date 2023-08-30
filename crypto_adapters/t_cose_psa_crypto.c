@@ -2,7 +2,7 @@
  * t_cose_psa_crypto.c
  *
  * Copyright 2019-2023, Laurence Lundblade
- * Copyright (c) 2020-2022, Arm Limited. All rights reserved.
+ * Copyright (c) 2020-2023, Arm Limited. All rights reserved.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  *
@@ -47,6 +47,7 @@
 #include <mbedtls/md.h>
 
 #include "t_cose_util.h"
+#include "t_cose_psa_crypto.h"
 
 #if MBEDTLS_VERSION_MAJOR < 3
 #define NO_MBED_KW_API
@@ -90,14 +91,12 @@ bool t_cose_crypto_is_algorithm_supported(int32_t cose_algorithm_id)
 #ifndef T_COSE_DISABLE_PS512
         T_COSE_ALGORITHM_PS512,
 #endif
-#ifndef T_COSE_DISABLE_MAC0
         T_COSE_ALGORITHM_HMAC256,
         T_COSE_ALGORITHM_HMAC384,
         T_COSE_ALGORITHM_HMAC512,
         T_COSE_ALGORITHM_A128GCM,
-        T_COSE_ALGORITHM_A192GCM, /* For 9053 direct, not HPKE */
+        T_COSE_ALGORITHM_A192GCM,
         T_COSE_ALGORITHM_A256GCM,
-        #endif /* T_COSE_DISABLE_MAC0 */
 
 #if !defined NO_MBED_KW_API & !defined T_COSE_DISABLE_KEYWRAP
         T_COSE_ALGORITHM_A128KW,
@@ -112,7 +111,6 @@ bool t_cose_crypto_is_algorithm_supported(int32_t cose_algorithm_id)
 }
 
 
-#ifndef T_COSE_DISABLE_SIGN1
 
 /**
  * \brief Map a COSE signing algorithm ID to a PSA signing algorithm ID
@@ -168,6 +166,9 @@ psa_status_to_t_cose_error_signing(psa_status_t err)
         { PSA_ERROR_NOT_SUPPORTED        , T_COSE_ERR_UNSUPPORTED_SIGNING_ALG},
         { PSA_ERROR_INSUFFICIENT_MEMORY  , T_COSE_ERR_INSUFFICIENT_MEMORY},
         { PSA_ERROR_CORRUPTION_DETECTED  , T_COSE_ERR_TAMPERING_DETECTED},
+#if PSA_CRYPTO_HAS_RESTARTABLE_SIGNING
+        { PSA_OPERATION_INCOMPLETE       , T_COSE_ERR_SIG_IN_PROGRESS},
+#endif /* PSA_CRYPTO_HAS_RESTARTABLE_SIGNING */
         { INT16_MIN                      , T_COSE_ERR_SIG_FAIL},
     };
 
@@ -180,7 +181,6 @@ psa_status_to_t_cose_error_signing(psa_status_t err)
 enum t_cose_err_t
 t_cose_crypto_verify(int32_t               cose_algorithm_id,
                      struct t_cose_key     verification_key,
-                     struct q_useful_buf_c kid,
                      void                 *crypto_context,
                      struct q_useful_buf_c hash_to_verify,
                      struct q_useful_buf_c signature)
@@ -190,12 +190,7 @@ t_cose_crypto_verify(int32_t               cose_algorithm_id,
     enum t_cose_err_t     return_value;
     psa_key_handle_t      verification_key_psa;
 
-    /* This implementation does no look up keys by kid in the key
-     * store */
-    ARG_UNUSED(kid);
-
     (void)crypto_context; /* This crypto-adapter doesn't use this */
-
 
     /* Convert to PSA algorithm ID scheme */
     psa_alg_id = cose_alg_id_to_psa_alg_id(cose_algorithm_id);
@@ -272,6 +267,75 @@ t_cose_crypto_sign(int32_t                cose_algorithm_id,
 }
 
 
+#if PSA_CRYPTO_HAS_RESTARTABLE_SIGNING
+/*
+ * See documentation in t_cose_crypto.h
+ */
+enum t_cose_err_t
+t_cose_crypto_sign_restart(bool                   started,
+                           int32_t                cose_algorithm_id,
+                           struct t_cose_key      signing_key,
+                           void                  *crypto_context,
+                           struct q_useful_buf_c  hash_to_sign,
+                           struct q_useful_buf    signature_buffer,
+                           struct q_useful_buf_c *signature)
+{
+    enum t_cose_err_t     return_value;
+    psa_status_t          psa_result;
+    psa_algorithm_t       psa_alg_id;
+    psa_key_handle_t      signing_key_psa;
+    size_t                signature_len;
+    struct t_cose_psa_crypto_context *psa_crypto_context;
+
+    psa_alg_id = cose_alg_id_to_psa_alg_id(cose_algorithm_id);
+    if(!PSA_ALG_IS_ECDSA(psa_alg_id) && !PSA_ALG_IS_RSA_PSS(psa_alg_id)) {
+        return_value = T_COSE_ERR_UNSUPPORTED_SIGNING_ALG;
+        goto Done;
+    }
+
+    signing_key_psa = (psa_key_handle_t)signing_key.key.handle;
+
+    /* It is assumed that this call is checking the signature_buffer
+     * length and won't write off the end of it.
+     */
+
+    if(!crypto_context) {
+        return_value = T_COSE_ERR_FAIL;
+        goto Done;
+    }
+    psa_crypto_context = (struct t_cose_psa_crypto_context *)crypto_context;
+
+    if(!started) {
+        psa_result = psa_sign_hash_start(
+                            &psa_crypto_context->operation,
+                            signing_key_psa,
+                            psa_alg_id,
+                            hash_to_sign.ptr,
+                            hash_to_sign.len);
+        if(psa_result != PSA_SUCCESS) {
+            return_value = psa_status_to_t_cose_error_signing(psa_result);
+            goto Done;
+        }
+    }
+    psa_result = psa_sign_hash_complete(
+                            &psa_crypto_context->operation,
+                            signature_buffer.ptr, /* Sig buf */
+                            signature_buffer.len, /* Sig buf size */
+                            &signature_len);
+
+    return_value = psa_status_to_t_cose_error_signing(psa_result);
+
+    if(return_value == T_COSE_SUCCESS) {
+        /* Success, fill in the return useful_buf */
+        signature->ptr = signature_buffer.ptr;
+        signature->len = signature_len;
+    }
+
+Done:
+     return return_value;
+}
+#endif /* PSA_CRYPTO_HAS_RESTARTABLE_SIGNING */
+
 /*
  * See documentation in t_cose_crypto.h
  */
@@ -312,10 +376,8 @@ enum t_cose_err_t t_cose_crypto_sig_size(int32_t           cose_algorithm_id,
 Done:
     return return_value;
 }
-#endif /* !T_COSE_DISABLE_SIGN1 */
 
 
-#if !defined(T_COSE_DISABLE_SIGN1)
 /**
  * \brief Convert COSE hash algorithm ID to a PSA hash algorithm ID
  *
@@ -432,11 +494,8 @@ t_cose_crypto_hash_finish(struct t_cose_crypto_hash *hash_ctx,
 Done:
     return psa_status_to_t_cose_error_hash(hash_ctx->status);
 }
-#endif /* !T_COSE_DISABLE_SIGN1 */
 
 
-
-#ifndef T_COSE_DISABLE_MAC0
 /**
  * \brief Convert COSE algorithm ID to a PSA HMAC algorithm ID
  *
@@ -470,17 +529,17 @@ static psa_algorithm_t cose_hmac_alg_id_to_psa(int32_t cose_hmac_alg_id)
 static enum t_cose_err_t
 psa_status_to_t_cose_error_hmac(psa_status_t status)
 {
-    /* See documentation for t_cose_int16_map(). It's use gives smaller
+    /* See documentation for t_cose_int16_map(). Its use gives smaller
      * object code than a switch statement here.
      */
     static const int16_t error_map[][2] = {
         { PSA_SUCCESS,                   T_COSE_SUCCESS},
-        { PSA_ERROR_NOT_SUPPORTED,       T_COSE_ERR_UNSUPPORTED_HASH},
+        { PSA_ERROR_NOT_SUPPORTED,       T_COSE_ERR_UNSUPPORTED_HMAC_ALG},
         { PSA_ERROR_INVALID_ARGUMENT,    T_COSE_ERR_INVALID_ARGUMENT},
         { PSA_ERROR_INSUFFICIENT_MEMORY, T_COSE_ERR_INSUFFICIENT_MEMORY},
         { PSA_ERROR_BUFFER_TOO_SMALL,    T_COSE_ERR_TOO_SMALL},
-        { PSA_ERROR_INVALID_SIGNATURE,   T_COSE_ERR_SIG_VERIFY},
-        { INT16_MIN,                     T_COSE_ERR_SIG_FAIL},
+        { PSA_ERROR_INVALID_SIGNATURE,   T_COSE_ERR_HMAC_VERIFY},
+        { INT16_MIN,                     T_COSE_ERR_HMAC_GENERAL_FAIL},
     };
 
     return (enum t_cose_err_t )t_cose_int16_map(error_map, (int16_t)status);
@@ -501,7 +560,7 @@ t_cose_crypto_hmac_compute_setup(struct t_cose_crypto_hmac *hmac_ctx,
     /* Map the algorithm ID */
     psa_alg = cose_hmac_alg_id_to_psa(cose_alg_id);
     if(!PSA_ALG_IS_MAC(psa_alg)) {
-        return T_COSE_ERR_UNSUPPORTED_SIGNING_ALG;
+        return T_COSE_ERR_UNSUPPORTED_HMAC_ALG;
     }
 
     /*
@@ -512,7 +571,7 @@ t_cose_crypto_hmac_compute_setup(struct t_cose_crypto_hmac *hmac_ctx,
     if((psa_alg != PSA_ALG_HMAC(PSA_ALG_SHA_256)) &&
        (psa_alg != PSA_ALG_HMAC(PSA_ALG_SHA_384)) &&
        (psa_alg != PSA_ALG_HMAC(PSA_ALG_SHA_512))) {
-        return T_COSE_ERR_UNSUPPORTED_SIGNING_ALG;
+        return T_COSE_ERR_UNSUPPORTED_HMAC_ALG;
     }
 
     hmac_ctx->op_ctx = psa_mac_operation_init();
@@ -577,7 +636,7 @@ t_cose_crypto_hmac_validate_setup(struct t_cose_crypto_hmac *hmac_ctx,
     /* Map the algorithm ID */
     psa_alg = cose_hmac_alg_id_to_psa(cose_alg_id);
     if(!PSA_ALG_IS_MAC(psa_alg)) {
-        return T_COSE_ERR_UNSUPPORTED_SIGNING_ALG;
+        return T_COSE_ERR_UNSUPPORTED_HMAC_ALG;
     }
 
     /*
@@ -588,7 +647,7 @@ t_cose_crypto_hmac_validate_setup(struct t_cose_crypto_hmac *hmac_ctx,
     if((psa_alg != PSA_ALG_HMAC(PSA_ALG_SHA_256)) &&
        (psa_alg != PSA_ALG_HMAC(PSA_ALG_SHA_384)) &&
        (psa_alg != PSA_ALG_HMAC(PSA_ALG_SHA_512))) {
-        return T_COSE_ERR_UNSUPPORTED_SIGNING_ALG;
+        return T_COSE_ERR_UNSUPPORTED_HMAC_ALG;
     }
 
     hmac_ctx->op_ctx = psa_mac_operation_init();
@@ -619,10 +678,7 @@ t_cose_crypto_hmac_validate_finish(struct t_cose_crypto_hmac *hmac_ctx,
     return psa_status_to_t_cose_error_hmac(psa_ret);
 }
 
-#endif /* !T_COSE_DISABLE_MAC0 */
 
-
-#ifndef T_COSE_DISABLE_EDDSA
 enum t_cose_err_t
 t_cose_crypto_sign_eddsa(struct t_cose_key      signing_key,
                          void                 *crypto_context,
@@ -643,13 +699,11 @@ t_cose_crypto_sign_eddsa(struct t_cose_key      signing_key,
 
 enum t_cose_err_t
 t_cose_crypto_verify_eddsa(struct t_cose_key     verification_key,
-                           struct q_useful_buf_c kid,
                            void                 *crypto_context,
                            struct q_useful_buf_c tbs,
                            struct q_useful_buf_c signature)
 {
     (void)verification_key;
-    (void)kid;
     (void)crypto_context;
     (void)tbs;
     (void)signature;
@@ -657,32 +711,31 @@ t_cose_crypto_verify_eddsa(struct t_cose_key     verification_key,
     /* MbedTLS does not support EdDSA */
     return T_COSE_ERR_UNSUPPORTED_SIGNING_ALG;
 }
-#endif /* ! T_COSE_DISABLE_EDDSA */
 
 
 /*
  * See documentation in t_cose_crypto.h
  */
 enum t_cose_err_t
-t_cose_crypto_generate_key(struct t_cose_key    *ephemeral_key,
-                           int32_t               cose_algorithm_id)
+t_cose_crypto_generate_ec_key(const int32_t       cose_ec_curve_id,
+                              struct t_cose_key  *key)
 {
-    psa_key_attributes_t skE_attributes = PSA_KEY_ATTRIBUTES_INIT;
-    psa_key_handle_t     skE_handle = 0;
+    psa_key_attributes_t key_attributes;
+    psa_key_handle_t     key_handle;
     psa_key_type_t       type;
     size_t               key_bitlen;
     psa_status_t         status;
 
-   switch (cose_algorithm_id) {
-    case T_COSE_HPKE_KEM_ID_P256:
-        type = PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1);
+   switch (cose_ec_curve_id) {
+    case T_COSE_ELLIPTIC_CURVE_P_256:
+        type       = PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1);
         key_bitlen = 256;
         break;
-    case T_COSE_HPKE_KEM_ID_P384:
-         type = PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1);
+    case T_COSE_ELLIPTIC_CURVE_P_384:
+         type       = PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1);
          key_bitlen = 384;
          break;
-    case T_COSE_HPKE_KEM_ID_P521:
+    case T_COSE_ELLIPTIC_CURVE_P_521:
          type = PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1);
          key_bitlen = 521;
          break;
@@ -690,22 +743,24 @@ t_cose_crypto_generate_key(struct t_cose_key    *ephemeral_key,
         return(T_COSE_ERR_UNSUPPORTED_KEM_ALG);
     }
 
-    /* generate ephemeral key pair: skE, pkE */
-    psa_set_key_usage_flags(&skE_attributes, PSA_KEY_USAGE_DERIVE | PSA_KEY_USAGE_EXPORT);
-    psa_set_key_algorithm(&skE_attributes, PSA_ALG_ECDH);
-    psa_set_key_type(&skE_attributes, type);
-    psa_set_key_bits(&skE_attributes, key_bitlen);
+    /* generate ephemeral key pair */
+    key_attributes = psa_key_attributes_init();
+    psa_set_key_usage_flags(&key_attributes, PSA_KEY_USAGE_DERIVE | PSA_KEY_USAGE_EXPORT);
+    psa_set_key_algorithm(&key_attributes, PSA_ALG_ECDH);
+    psa_set_key_type(&key_attributes, type);
+    psa_set_key_bits(&key_attributes, key_bitlen);
 
-    status = psa_generate_key(&skE_attributes, &skE_handle);
+    status = psa_generate_key(&key_attributes, &key_handle);
 
     if (status != PSA_SUCCESS) {
-        return(T_COSE_ERR_KEY_GENERATION_FAILED);
+        return T_COSE_ERR_KEY_GENERATION_FAILED;
     }
 
-    ephemeral_key->key.handle = skE_handle;
+    key->key.handle = key_handle;
 
-    return(T_COSE_SUCCESS);
+    return T_COSE_SUCCESS;
 }
+
 
 /*
  * See documentation in t_cose_crypto.h
@@ -983,30 +1038,6 @@ t_cose_crypto_free_symmetric_key(struct t_cose_key key)
 }
 
 
-/*
- * See documentation in t_cose_crypto.h
- */
-enum t_cose_err_t
-t_cose_crypto_export_public_key(struct t_cose_key      key,
-                                struct q_useful_buf    pk_buffer,
-                                size_t                *pk_len)
-{
-    psa_status_t      status;
-
-    /* Export public key */
-    status = psa_export_public_key( (mbedtls_svc_key_id_t)
-                                       key.key.handle, /* in: Key handle     */
-                                    pk_buffer.ptr,     /* in: PK buffer      */
-                                    pk_buffer.len,     /* in: PK buffer size */
-                                    pk_len);           /* out: Result length */
-
-    if (status != PSA_SUCCESS) {
-        return(T_COSE_ERR_PUBLIC_KEY_EXPORT_FAILED);
-    }
-
-    return(T_COSE_SUCCESS);
-}
-
 
 /*
  * See documentation in t_cose_crypto.h
@@ -1273,20 +1304,61 @@ t_cose_crypto_aead_decrypt(const int32_t          cose_algorithm_id,
 
 
 
+/*
+ * See documentation in t_cose_crypto.h
+ */
+enum t_cose_err_t
+t_cose_crypto_ecdh(struct t_cose_key      private_key,
+                   struct t_cose_key      public_key,
+                   struct q_useful_buf    shared_key_buf,
+                   struct q_useful_buf_c *shared_key)
+{
+    psa_status_t         psa_status;
+    MakeUsefulBufOnStack(public_key_buf, T_COSE_EXPORT_PUBLIC_KEY_MAX_SIZE);
+    size_t               pub_key_len;
+
+    /* Export public key */
+    psa_status = psa_export_public_key((mbedtls_svc_key_id_t)public_key.key.handle, /* in: Key handle     */
+                                        public_key_buf.ptr,     /* in: PK buffer      */
+                                        public_key_buf.len,     /* in: PK buffer size */
+                                       &pub_key_len);           /* out: Result length */
+    if(psa_status != PSA_SUCCESS) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+
+    psa_status = psa_raw_key_agreement(PSA_ALG_ECDH,
+                                       (mbedtls_svc_key_id_t)private_key.key.handle,
+                                       public_key_buf.ptr,
+                                       pub_key_len,
+                                       shared_key_buf.ptr,
+                                       shared_key_buf.len,
+                                       &(shared_key->len));
+    if(psa_status != PSA_SUCCESS) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+
+    shared_key->ptr = shared_key_buf.ptr;
+
+    return T_COSE_SUCCESS;
+}
+
+
+
+
 
 /*
  * See documentation in t_cose_crypto.h
  */
 enum t_cose_err_t
-t_cose_crypto_hkdf(int32_t                cose_hash_algorithm_id,
-                   struct q_useful_buf_c  salt,
-                   struct q_useful_buf_c  ikm,
-                   struct q_useful_buf_c  info,
-                   struct q_useful_buf    okm_buffer)
+t_cose_crypto_hkdf(const int32_t               cose_hash_algorithm_id,
+                   const struct q_useful_buf_c salt,
+                   const struct q_useful_buf_c ikm,
+                   const struct q_useful_buf_c info,
+                   const struct q_useful_buf   okm_buffer)
 {
     int                       psa_result;
     const mbedtls_md_info_t  *md_info;
-    size_t                    okm_in_out_len;
     mbedtls_md_type_t         hash_type;
 
     switch(cose_hash_algorithm_id) {
@@ -1319,4 +1391,193 @@ t_cose_crypto_hkdf(int32_t                cose_hash_algorithm_id,
     }
 
     return T_COSE_SUCCESS;
+}
+
+
+
+
+/*
+ * See documentation in t_cose_crypto.h
+ */
+enum t_cose_err_t
+t_cose_crypto_import_ec2_pubkey(int32_t               cose_ec_curve_id,
+                                struct q_useful_buf_c x_coord,
+                                struct q_useful_buf_c y_coord,
+                                bool                  y_bool,
+                                struct t_cose_key    *key_handle)
+{
+    psa_status_t          status;
+    psa_key_attributes_t  attributes;
+    psa_key_type_t        type_public;
+    struct q_useful_buf_c  import;
+    // TODO: really make sure this size is right for the curve types supported
+    UsefulOutBuf_MakeOnStack (import_form, T_COSE_EXPORT_PUBLIC_KEY_MAX_SIZE + 5);
+
+    switch (cose_ec_curve_id) {
+    case T_COSE_ELLIPTIC_CURVE_P_256:
+         type_public  = PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1);
+         break;
+    case T_COSE_ELLIPTIC_CURVE_P_384:
+         type_public  = PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1);
+         break;
+    case T_COSE_ELLIPTIC_CURVE_P_521:
+         type_public  = PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1);
+         break;
+
+    default:
+         return T_COSE_ERR_UNSUPPORTED_ELLIPTIC_CURVE_ALG;
+    }
+
+
+    // TODO: are these attributes right?
+    attributes = psa_key_attributes_init();
+    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_DERIVE | PSA_KEY_USAGE_COPY);
+    psa_set_key_algorithm(&attributes, PSA_ALG_ECDH);
+    psa_set_key_type(&attributes, type_public);
+
+    /* This converts to a serialized representation of an EC Point
+     * described in
+     * Certicom Research, "SEC 1: Elliptic Curve Cryptography", Standards for
+     * Efficient Cryptography, May 2009, <https://www.secg.org/sec1-v2.pdf>.
+     * The description is very mathematical and hard to read for us
+     * coder types. It was much easier to understand reading Jim's
+     * COSE-C implementation. See mbedtls_ecp_keypair() in COSE-C.
+     *
+     * This string is the format used by Mbed TLS to import an EC
+     * public key.
+     *
+     * This does implement point compression. The patents for it have
+     * run out so it's OK to implement. Point compression is commented
+     * out in Jim's implementation, presumably because of the paten
+     * issue.
+     *
+     * A simple English description of the format is this. The first
+     * byte is 0x04 for no point compression and 0x02 or 0x03 if there
+     * is point compression. 0x02 indicates a positive y and 0x03 a
+     * negative y (or is the other way). Following the first byte
+     * are the octets of x. If the first byte is 0x04 then following
+     * x is the y value.
+     *
+     * UsefulOutBut is used to safely construct this string.
+     */
+    uint8_t first_byte;
+    if(q_useful_buf_c_is_null(y_coord)) {
+        /* This is point compression */
+        first_byte = y_bool ? 0x03 : 0x02;
+    } else {
+        first_byte = 0x04;
+    }
+
+    // TODO: is padding of x necessary? Jim's code goes to
+    // a lot of trouble to look up the group and get the length.
+
+    UsefulOutBuf_AppendByte(&import_form, first_byte);
+    UsefulOutBuf_AppendUsefulBuf(&import_form, x_coord);
+    if(first_byte == 0x04) {
+        UsefulOutBuf_AppendUsefulBuf(&import_form, y_coord);
+    }
+    import = UsefulOutBuf_OutUBuf(&import_form);
+
+
+    status = psa_import_key(&attributes,
+                            import.ptr, import.len,
+                            (mbedtls_svc_key_id_t *)(&key_handle->key.handle));
+
+    if (status != PSA_SUCCESS) {
+        return T_COSE_ERR_PRIVATE_KEY_IMPORT_FAILED;
+    }
+
+    return T_COSE_SUCCESS;
+}
+
+
+
+
+enum t_cose_err_t
+t_cose_crypto_export_ec2_key(struct t_cose_key      key_handle,
+                             int32_t               *curve,
+                             struct q_useful_buf    x_coord_buf,
+                             struct q_useful_buf_c *x_coord,
+                             struct q_useful_buf    y_coord_buf,
+                             struct q_useful_buf_c *y_coord,
+                             bool                  *y_bool)
+{
+    psa_status_t          psa_status;
+    uint8_t               export_buf[T_COSE_EXPORT_PUBLIC_KEY_MAX_SIZE];
+    size_t                export_len;
+    struct q_useful_buf_c export;
+    size_t                len;
+    uint8_t               first_byte;
+    psa_key_attributes_t  attributes;
+
+    /* Export public key */
+    psa_status = psa_export_public_key((mbedtls_svc_key_id_t)key_handle.key.handle, /* in: Key handle     */
+                                        export_buf,     /* in: PK buffer      */
+                                        sizeof(export_buf),     /* in: PK buffer size */
+                                       &export_len);           /* out: Result length */
+    if(psa_status != PSA_SUCCESS) {
+        return T_COSE_ERR_FAIL; // TODO: error code
+    }
+    first_byte = export_buf[0];
+    export = (struct q_useful_buf_c){export_buf+1, export_len-1};
+
+    /* export_buf is one first byte, the x-coord and maybe the y-coord
+     * per SEC1.
+     */
+
+    attributes = psa_key_attributes_init();
+    psa_status = psa_get_key_attributes((mbedtls_svc_key_id_t)key_handle.key.handle,
+                                        &attributes);
+    if(PSA_KEY_TYPE_ECC_GET_FAMILY(psa_get_key_type(&attributes)) != PSA_ECC_FAMILY_SECP_R1) {
+        return T_COSE_ERR_FAIL;
+    }
+
+    switch(psa_get_key_bits(&attributes)) {
+    case 256:
+        *curve = T_COSE_ELLIPTIC_CURVE_P_256;
+        break;
+    case 384:
+        *curve = T_COSE_ELLIPTIC_CURVE_P_384;
+        break;
+    case 521:
+        *curve = T_COSE_ELLIPTIC_CURVE_P_521;
+        break;
+    default:
+        return T_COSE_ERR_FAIL;
+    }
+
+
+    switch(first_byte) {
+        case 0x04:
+            len = (export_len - 1 ) / 2;
+            *y_coord = UsefulBuf_Copy(y_coord_buf, UsefulBuf_Tail(export, len));
+            break;
+
+        case 0x02:
+            len = export_len - 1;
+            *y_coord = NULL_Q_USEFUL_BUF_C;
+            *y_bool = true;
+            break;
+
+        case 0x03:
+            len = export_len - 1;
+            *y_coord = NULL_Q_USEFUL_BUF_C;
+            *y_bool = false;
+            break;
+
+        default:
+            return T_COSE_ERR_FAIL;
+    }
+
+    *x_coord = UsefulBuf_Copy(x_coord_buf, UsefulBuf_Head(export, len));
+    // TODO: errors when buffer is too small
+
+    return T_COSE_SUCCESS;
+}
+
+
+void
+t_cose_crypto_free_ec_key(struct t_cose_key key_handle)
+{
+    psa_destroy_key((psa_key_id_t)key_handle.key.handle);
 }

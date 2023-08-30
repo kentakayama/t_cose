@@ -2,7 +2,7 @@
  *  t_cose_sign_verify_test.c
  *
  * Copyright 2019-2022, Laurence Lundblade
- * Copyright (c) 2022, Arm Limited. All rights reserved.
+ * Copyright (c) 2022-2023, Arm Limited. All rights reserved.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  *
@@ -12,9 +12,13 @@
 #include <stdlib.h>
 #include "t_cose/t_cose_sign1_sign.h"
 #include "t_cose/t_cose_sign1_verify.h"
+#include "t_cose/t_cose_signature_sign_restart.h"
 #include "t_cose/q_useful_buf.h"
 #include "init_keys.h"
 #include "t_cose_sign_verify_test.h"
+
+#include "t_cose/t_cose_signature_verify_eddsa.h"
+#include "t_cose/t_cose_signature_verify_main.h"
 
 #include "t_cose_crypto.h" /* Just for t_cose_crypto_sig_size() */
 
@@ -222,13 +226,11 @@ static struct test_case test_cases[] = {
     { T_COSE_ALGORITHM_PS256, { signed_cose_made_by_psa_crypto_ps256, sizeof(signed_cose_made_by_psa_crypto_ps256) } },
     { T_COSE_ALGORITHM_PS384, { signed_cose_made_by_psa_crypto_ps384, sizeof(signed_cose_made_by_psa_crypto_ps384) } },
     { T_COSE_ALGORITHM_PS512, { signed_cose_made_by_psa_crypto_ps512, sizeof(signed_cose_made_by_psa_crypto_ps512) } },
-#ifndef T_COSE_DISABLE_EDDSA
     { T_COSE_ALGORITHM_EDDSA, { signed_cose_made_by_pycose_eddsa, sizeof(signed_cose_made_by_pycose_eddsa) } },
-#endif /* !T_COSE_DISABLE_EDDSA */
     { 0 }, /* Sentinel value with an invalid algorithm id */
 };
 
-static int_fast32_t sign_verify_basic_test_alg(int32_t cose_alg)
+static int32_t sign_verify_basic_test_alg(int32_t cose_alg)
 {
     struct t_cose_sign1_sign_ctx   sign_ctx;
     int32_t                        return_value;
@@ -295,9 +297,9 @@ Done:
 /*
  * Public function, see t_cose_sign_verify_test.h
  */
-int_fast32_t sign_verify_basic_test(void)
+int32_t sign_verify_basic_test(void)
 {
-    int_fast32_t return_value;
+    int32_t return_value;
 
     const struct test_case* tc;
     for (tc = test_cases; tc->cose_algorithm_id != 0; tc++) {
@@ -312,10 +314,8 @@ int_fast32_t sign_verify_basic_test(void)
     return 0;
 }
 
-/*
- * Public function, see t_cose_sign_verify_test.h
- */
-int_fast32_t sig_fail_test(int32_t cose_alg)
+
+static int32_t sig_fail_test(int32_t cose_alg)
 {
     struct t_cose_sign1_sign_ctx   sign_ctx;
     QCBOREncodeContext             cbor_encode;
@@ -401,9 +401,9 @@ Done:
 /*
  * Public function, see t_cose_sign_verify_test.h
  */
-int_fast32_t sign_verify_sig_fail_test()
+int32_t sign_verify_sig_fail_test()
 {
-    int_fast32_t return_value;
+    int32_t return_value;
     const struct test_case* tc;
     for (tc = test_cases; tc->cose_algorithm_id != 0; tc++) {
         if (t_cose_is_algorithm_supported(tc->cose_algorithm_id)) {
@@ -420,7 +420,7 @@ int_fast32_t sign_verify_sig_fail_test()
 /*
  * Public function, see t_cose_sign_verify_test.h
  */
-int_fast32_t sign_verify_make_cwt_test()
+int32_t sign_verify_make_cwt_test()
 {
     struct t_cose_sign1_sign_ctx   sign_ctx;
     QCBOREncodeContext             cbor_encode;
@@ -558,11 +558,12 @@ Done:
 }
 
 
-static int_fast32_t size_test(int32_t               cose_algorithm_id,
-                              struct q_useful_buf_c kid)
+static int32_t signing_size_test(int32_t               cose_algorithm_id,
+                                 struct q_useful_buf_c kid)
 {
+#define SIZE_TEST_AUX_SIZE 100
     struct t_cose_key              key_pair;
-    struct t_cose_sign1_sign_ctx   sign_ctx;
+    struct t_cose_sign1_sign_ctx   sign1_ctx;
     QCBOREncodeContext             cbor_encode;
     int32_t                        return_value;
     enum t_cose_err_t              result;
@@ -571,9 +572,17 @@ static int_fast32_t size_test(int32_t               cose_algorithm_id,
     QCBORError                     cbor_error;
     struct q_useful_buf_c          actual_signed_cose;
     Q_USEFUL_BUF_MAKE_STACK_UB(    signed_cose_buffer, 300);
-    Q_USEFUL_BUF_MAKE_STACK_UB(    auxiliary_buffer, 100);
+    Q_USEFUL_BUF_MAKE_STACK_UB(    auxiliary_buffer, SIZE_TEST_AUX_SIZE);
     struct q_useful_buf_c          payload;
     size_t                         sig_size;
+#ifndef T_COSE_DISABLE_COSE_SIGN
+    struct t_cose_sign_sign_ctx    sign_ctx;
+    struct t_cose_signature_sign_eddsa  signer_eddsa;
+    struct t_cose_signature_sign_main  signer_main;
+    struct t_cose_signature_sign  *signer;
+    struct q_useful_buf_c          calc_size;
+#endif /* T_COSE_DISABLE_COSE_SIGN */
+    size_t                         auxiliary_buffer_size;
 
     result = init_fixed_test_signing_key(cose_algorithm_id, &key_pair);
     if(result) {
@@ -592,10 +601,10 @@ static int_fast32_t size_test(int32_t               cose_algorithm_id,
     nil_buf = (struct q_useful_buf) {NULL, INT32_MAX};
     QCBOREncode_Init(&cbor_encode, nil_buf);
 
-    t_cose_sign1_sign_init(&sign_ctx,  0,  cose_algorithm_id);
-    t_cose_sign1_set_signing_key(&sign_ctx, key_pair, kid);
+    t_cose_sign1_sign_init(&sign1_ctx,  0,  cose_algorithm_id);
+    t_cose_sign1_set_signing_key(&sign1_ctx, key_pair, kid);
 
-    result = t_cose_sign1_encode_parameters(&sign_ctx, &cbor_encode);
+    result = t_cose_sign1_encode_parameters(&sign1_ctx, &cbor_encode);
     if(result) {
         return_value = 3000 + (int32_t)result;
         goto Done;
@@ -603,7 +612,7 @@ static int_fast32_t size_test(int32_t               cose_algorithm_id,
 
     QCBOREncode_AddEncoded(&cbor_encode, payload);
 
-    result = t_cose_sign1_encode_signature(&sign_ctx, &cbor_encode);
+    result = t_cose_sign1_encode_signature(&sign1_ctx, &cbor_encode);
     if(result) {
         return_value = 4000 + (int32_t)result;
         goto Done;
@@ -623,18 +632,19 @@ static int_fast32_t size_test(int32_t               cose_algorithm_id,
         goto Done;
     }
 
-    /**
-     * Get the expected auxiliary buffer size. For anything but EDDSA, this should be zero.
-     */
-    size_t auxiliary_buffer_size = t_cose_sign1_sign_auxiliary_buffer_size(&sign_ctx);
+    /* ----- aux buf size for EdDSA ---- */
+    auxiliary_buffer_size = t_cose_sign1_sign_auxiliary_buffer_size(&sign1_ctx);
     if (cose_algorithm_id == T_COSE_ALGORITHM_EDDSA) {
         /* TBS is a bit smaller, given it doesn't include the signature */
         expected_min = payload.len + kid.len;
-        if(auxiliary_buffer_size < expected_min || auxiliary_buffer_size > expected_min + 30) {
+        if(auxiliary_buffer_size < expected_min ||
+           auxiliary_buffer_size > expected_min + 30 ||
+           auxiliary_buffer_size > SIZE_TEST_AUX_SIZE) {
             return_value = -2;
             goto Done;
         }
     } else if (auxiliary_buffer_size != 0) {
+        /* For anything but EDDSA, aux buf size should be zero.*/
         return_value = -3;
         goto Done;
     }
@@ -642,13 +652,15 @@ static int_fast32_t size_test(int32_t               cose_algorithm_id,
     /* ---- Now make a real COSE_Sign1 and compare the size ---- */
     QCBOREncode_Init(&cbor_encode, signed_cose_buffer);
 
-    t_cose_sign1_sign_init(&sign_ctx,  0,  cose_algorithm_id);
-    t_cose_sign1_set_signing_key(&sign_ctx, key_pair, kid);
+    t_cose_sign1_sign_init(&sign1_ctx,  0,  cose_algorithm_id);
+    t_cose_sign1_set_signing_key(&sign1_ctx, key_pair, kid);
     if (auxiliary_buffer_size > 0) {
-        t_cose_sign1_sign_set_auxiliary_buffer(&sign_ctx, auxiliary_buffer);
+        /* Narrow size to exactly what is required to fully check calc. */
+        auxiliary_buffer.len = auxiliary_buffer_size;
+        t_cose_sign1_sign_set_auxiliary_buffer(&sign1_ctx, auxiliary_buffer);
     }
 
-    result = t_cose_sign1_encode_parameters(&sign_ctx, &cbor_encode);
+    result = t_cose_sign1_encode_parameters(&sign1_ctx, &cbor_encode);
     if(result) {
         return_value = 6000 + (int32_t)result;
         goto Done;
@@ -656,7 +668,7 @@ static int_fast32_t size_test(int32_t               cose_algorithm_id,
 
     QCBOREncode_AddEncoded(&cbor_encode, payload);
 
-    result = t_cose_sign1_encode_signature(&sign_ctx, &cbor_encode);
+    result = t_cose_sign1_encode_signature(&sign1_ctx, &cbor_encode);
     if(result) {
         return_value = 7000 + (int32_t)result;
         goto Done;
@@ -669,12 +681,12 @@ static int_fast32_t size_test(int32_t               cose_algorithm_id,
     }
 
     /* ---- Again with one-call API to make COSE_Sign1 ---- */\
-    t_cose_sign1_sign_init(&sign_ctx, 0, cose_algorithm_id);
-    t_cose_sign1_set_signing_key(&sign_ctx, key_pair, kid);
+    t_cose_sign1_sign_init(&sign1_ctx, 0, cose_algorithm_id);
+    t_cose_sign1_set_signing_key(&sign1_ctx, key_pair, kid);
     if (auxiliary_buffer_size > 0) {
-        t_cose_sign1_sign_set_auxiliary_buffer(&sign_ctx, auxiliary_buffer);
+        t_cose_sign1_sign_set_auxiliary_buffer(&sign1_ctx, auxiliary_buffer);
     }
-    result = t_cose_sign1_sign(&sign_ctx,
+    result = t_cose_sign1_sign(&sign1_ctx,
                                 payload,
                                 signed_cose_buffer,
                                &actual_signed_cose);
@@ -688,6 +700,77 @@ static int_fast32_t size_test(int32_t               cose_algorithm_id,
         goto Done;
     }
 
+#ifndef T_COSE_DISABLE_COSE_SIGN
+    /* ========= Again for COSE_Sign ========= */
+
+    /* ---- First calculate the size ----- */
+    t_cose_sign_sign_init(&sign_ctx, T_COSE_OPT_MESSAGE_TYPE_SIGN);
+
+    if (cose_algorithm_id == T_COSE_ALGORITHM_EDDSA) {
+        t_cose_signature_sign_eddsa_init(&signer_eddsa);
+        t_cose_signature_sign_eddsa_set_signing_key(&signer_eddsa,
+                                                    key_pair,
+                                                    NULL_Q_USEFUL_BUF_C);
+        signer = (struct t_cose_signature_sign *)&signer_eddsa;
+    } else {
+        t_cose_signature_sign_main_init(&signer_main, cose_algorithm_id);
+        t_cose_signature_sign_main_set_signing_key(&signer_main,
+                                                   key_pair,
+                                                   NULL_Q_USEFUL_BUF_C);
+        signer = (struct t_cose_signature_sign *)&signer_main;
+    }
+    t_cose_sign_add_signer(&sign_ctx, signer);
+
+    nil_buf = (struct q_useful_buf) {NULL, INT32_MAX};
+    result = t_cose_sign_sign(&sign_ctx,
+                              NULL_Q_USEFUL_BUF_C,
+                              payload,
+                              nil_buf,
+                             &calc_size);
+    if(result) {
+        return_value = 9000 + (int32_t)result;
+        goto Done;
+    }
+
+
+    /* ----- aux buf size for EdDSA ---- */
+    if(cose_algorithm_id == T_COSE_ALGORITHM_EDDSA) {
+        auxiliary_buffer_size = t_cose_signature_sign_eddsa_auxiliary_buffer_size(&signer_eddsa);
+        /* TBS is a bit smaller, given it doesn't include the signature */
+        expected_min = payload.len + kid.len;
+        if(auxiliary_buffer_size < expected_min ||
+           auxiliary_buffer_size > expected_min + 30 ||
+           auxiliary_buffer_size > SIZE_TEST_AUX_SIZE) {
+            return_value = -10;
+            goto Done;
+        }
+        /* Narrow size to exactly what is required to fully check calc. */
+        auxiliary_buffer.len = auxiliary_buffer_size;
+        t_cose_signature_sign_eddsa_set_auxiliary_buffer(&signer_eddsa,
+                                                         auxiliary_buffer);
+    } else if (auxiliary_buffer_size != 0) {
+        /* For anything but EDDSA, aux buf size should be zero.*/
+        return_value = -11;
+        goto Done;
+    }
+
+    /* ---- Make a real COSE_Sign and compare the size ---- */
+    result = t_cose_sign_sign(&sign_ctx,
+                              NULL_Q_USEFUL_BUF_C,
+                              payload,
+                              signed_cose_buffer,
+                             &actual_signed_cose);
+    if(result) {
+        return_value = 9500 + (int32_t)result;
+        goto Done;
+    }
+
+    if(actual_signed_cose.len != calc_size.len) {
+        return_value = -12;
+        goto Done;
+    }
+#endif /* ! T_COSE_DISABLE_COSE_SIGN */
+
     return_value = 0;
 
 Done:
@@ -700,19 +783,21 @@ Done:
 /*
  * Public function, see t_cose_sign_verify_test.h
  */
-int_fast32_t sign_verify_get_size_test()
+int32_t sign_verify_get_size_test()
 {
-    int_fast32_t return_value;
+    int32_t      return_value;
     const struct test_case* tc;
+
+    /* Just looping over all the algs here */
     for (tc = test_cases; tc->cose_algorithm_id != 0; tc++) {
         if (t_cose_is_algorithm_supported(tc->cose_algorithm_id)) {
-            return_value = size_test(tc->cose_algorithm_id,
-                                     NULL_Q_USEFUL_BUF_C);
+            return_value = signing_size_test(tc->cose_algorithm_id,
+                                             NULL_Q_USEFUL_BUF_C);
             if (return_value) {
                 return (int32_t)(1 + tc - test_cases) * 10000 + return_value;
             }
 
-            return_value = size_test(tc->cose_algorithm_id,
+            return_value = signing_size_test(tc->cose_algorithm_id,
                                      Q_USEFUL_BUF_FROM_SZ_LITERAL("greasy kid stuff"));
             if (return_value) {
                 return (int32_t)(1 + tc - test_cases) * 10000 + return_value;
@@ -724,7 +809,7 @@ int_fast32_t sign_verify_get_size_test()
 }
 
 
-static int_fast32_t known_good_test(int cose_algorithm_id, struct q_useful_buf_c signed_message)
+static int32_t known_good_test(int cose_algorithm_id, struct q_useful_buf_c signed_message)
 {
     int32_t                        return_value;
     enum t_cose_err_t              result;
@@ -805,9 +890,9 @@ Done2:
     return return_value;
 }
 
-int_fast32_t sign_verify_known_good_test(void)
+int32_t sign_verify_known_good_test(void)
 {
-    int_fast32_t return_value = 0;
+    int32_t return_value = 0;
     const struct test_case* tc;
     for (tc = test_cases; tc->cose_algorithm_id != 0; tc++) {
         if (t_cose_is_algorithm_supported(tc->cose_algorithm_id)) {
@@ -835,7 +920,7 @@ int_fast32_t sign_verify_known_good_test(void)
  * not supported by the current t_cose configuration
  * and crypto adapter.
  */
-static int_fast32_t
+static int32_t
 sign_verify_unsupported_test_alg(int32_t cose_alg,
                                  struct q_useful_buf_c signed_message)
 {
@@ -879,9 +964,9 @@ Done:
     return return_value;
 }
 
-int_fast32_t sign_verify_unsupported_test(void)
+int32_t sign_verify_unsupported_test(void)
 {
-    int_fast32_t return_value;
+    int32_t return_value;
     const struct test_case* tc;
     for (tc = test_cases; tc->cose_algorithm_id != 0; tc++) {
         /* Unlike other tests, this one runs only on unsupported algorithms.
@@ -901,7 +986,7 @@ int_fast32_t sign_verify_unsupported_test(void)
 /*
  * Public function, see t_cose_sign_verify_test.h
  */
-int_fast32_t sign_verify_bad_auxiliary_buffer(void)
+int32_t sign_verify_bad_auxiliary_buffer(void)
 {
     enum t_cose_err_t              result;
     int32_t                        return_value;
@@ -919,7 +1004,7 @@ int_fast32_t sign_verify_bad_auxiliary_buffer(void)
      * meaning less if we don't support it.
      */
     if (!t_cose_is_algorithm_supported(T_COSE_ALGORITHM_EDDSA)) {
-        return 0;
+        return INT32_MIN; /* Means no testing was actually done */
     }
 
     result = init_fixed_test_signing_key(T_COSE_ALGORITHM_EDDSA, &key_pair);
@@ -984,7 +1069,9 @@ Done:
 }
 
 
-int_fast32_t sign_verify_multi(void)
+
+#ifndef T_COSE_DISABLE_COSE_SIGN
+int32_t sign_verify_multi(void)
 {
     enum t_cose_err_t              result;
     struct t_cose_key   key_pair1;
@@ -1003,7 +1090,7 @@ int_fast32_t sign_verify_multi(void)
 
     if (!t_cose_is_algorithm_supported(T_COSE_ALGORITHM_ES512)) {
         /* T_COSE_ALGORITHM_ES512 is required for this test */
-        return 0;
+        return INT32_MIN; /* Means no testing was actually done */
     }
 
     result = init_fixed_test_signing_key(T_COSE_ALGORITHM_ES256, &key_pair1);
@@ -1052,7 +1139,7 @@ int_fast32_t sign_verify_multi(void)
         return 2;
     }
 
-    t_cose_sign_verify_init(&verify_ctx, T_COSE_OPT_MESSAGE_TYPE_SIGN | T_COSE_VERIFY_ALL_SIGNATURES);
+    t_cose_sign_verify_init(&verify_ctx, T_COSE_OPT_MESSAGE_TYPE_SIGN | T_COSE_OPT_VERIFY_ALL_SIGNATURES);
 
     t_cose_signature_verify_main_init(&verify1);
     t_cose_signature_verify_main_set_key(&verify1, key_pair1, Q_USEFUL_BUF_FROM_SZ_LITERAL("kid1"));
@@ -1068,15 +1155,9 @@ int_fast32_t sign_verify_multi(void)
                                 &verified_payload,
                                  NULL);
 
-#ifdef QCBOR_FOR_T_COSE_2
     if(result) {
         return 3;
     }
-#else
-    if(result != T_COSE_ERR_CANT_PROCESS_MULTIPLE) {
-        return 33;
-    }
-#endif /* QCBOR_FOR_T_COSE_2 */
 
 
     if(q_useful_buf_compare(verified_payload, Q_USEFUL_BUF_FROM_SZ_LITERAL("payload"))){
@@ -1089,3 +1170,434 @@ int_fast32_t sign_verify_multi(void)
 
     return 0;
 }
+
+
+static enum t_cose_err_t
+make_triple_signed(struct q_useful_buf buffer,
+                   struct q_useful_buf_c *signed_message)
+{
+    enum t_cose_err_t            result;
+    struct t_cose_sign_sign_ctx  signing_ctx;
+    MakeUsefulBufOnStack(        eddsa_aux_buf, 100);
+
+
+    t_cose_sign_sign_init(&signing_ctx, T_COSE_OPT_MESSAGE_TYPE_SIGN);
+
+    struct t_cose_signature_sign_main  ecdsa_signer;
+    struct t_cose_key                  ecdsa_key;
+    t_cose_signature_sign_main_init(&ecdsa_signer, T_COSE_ALGORITHM_ES256);
+    init_fixed_test_signing_key(T_COSE_ALGORITHM_ES256, &ecdsa_key);
+    t_cose_signature_sign_main_set_signing_key(&ecdsa_signer,
+                                               ecdsa_key,
+                                               Q_USEFUL_BUF_FROM_SZ_LITERAL("ecsda_kid"));
+    t_cose_sign_add_signer(&signing_ctx, t_cose_signature_sign_from_main(&ecdsa_signer));
+
+
+
+    struct t_cose_signature_sign_eddsa eddsa_signer;
+    struct t_cose_key                  eddsa_key;
+    t_cose_signature_sign_eddsa_init(&eddsa_signer);
+    init_fixed_test_signing_key(T_COSE_ALGORITHM_EDDSA, &eddsa_key);
+    t_cose_signature_sign_eddsa_set_signing_key(&eddsa_signer,
+                                               eddsa_key,
+                                               Q_USEFUL_BUF_FROM_SZ_LITERAL("eddsa_kid"));
+    t_cose_signature_sign_eddsa_set_auxiliary_buffer(&eddsa_signer, eddsa_aux_buf);
+    t_cose_sign_add_signer(&signing_ctx, t_cose_signature_sign_from_eddsa(&eddsa_signer));
+
+
+    struct t_cose_signature_sign_main  rsa_signer;
+    struct t_cose_key                  rsa_key;
+    t_cose_signature_sign_main_init(&rsa_signer, T_COSE_ALGORITHM_PS256);
+    init_fixed_test_signing_key(T_COSE_ALGORITHM_PS256, &rsa_key);
+    t_cose_signature_sign_main_set_signing_key(&rsa_signer,
+                                               rsa_key,
+                                               Q_USEFUL_BUF_FROM_SZ_LITERAL("rsa_kid"));
+    t_cose_sign_add_signer(&signing_ctx, t_cose_signature_sign_from_main(&rsa_signer));
+
+    result = t_cose_sign_sign(&signing_ctx,
+                               Q_USEFUL_BUF_FROM_SZ_LITERAL("SAMPLE AAD"),
+                               Q_USEFUL_BUF_FROM_SZ_LITERAL("SAMPLE PAYLOAD"),
+                               buffer, signed_message);
+
+    free_fixed_signing_key(ecdsa_key);
+    free_fixed_signing_key(eddsa_key);
+    free_fixed_signing_key(rsa_key);
+
+    return result;
+}
+
+
+int32_t verify_multi_test(void)
+{
+    enum t_cose_err_t            err;
+    MakeUsefulBufOnStack(        cose_sign_buf, 700);
+    struct q_useful_buf_c        cose_sign;
+    struct t_cose_parameter      param_pool[25];
+    Q_USEFUL_BUF_MAKE_STACK_UB(  auxiliary_buffer, 100);
+
+    if (!t_cose_is_algorithm_supported(T_COSE_ALGORITHM_ES256) ||
+        !t_cose_is_algorithm_supported(T_COSE_ALGORITHM_EDDSA) ||
+        !t_cose_is_algorithm_supported(T_COSE_ALGORITHM_PS256)) {
+        /* T_COSE_ALGORITHM_ES512 is required for this test */
+        return INT32_MIN; /* Means no testing was actually done */
+    }
+    /* This requires Eddsa, RSA and ECDSA. Since PSA doesn't support EdDSA,
+     * this can only run with OpenSSL.
+     */
+    // TODO: check for algorithm support?
+    err = make_triple_signed(cose_sign_buf, &cose_sign);
+    if(err) {
+        return 895;
+    }
+
+
+    struct t_cose_sign_verify_ctx  verify_ctx;
+    struct q_useful_buf_c payload;
+
+    t_cose_sign_verify_init(&verify_ctx, T_COSE_OPT_MESSAGE_TYPE_SIGN | T_COSE_OPT_VERIFY_ALL_SIGNATURES);
+
+    struct t_cose_parameter_storage st;
+    T_COSE_PARAM_STORAGE_INIT(st, param_pool);
+    t_cose_sign_add_param_storage(&verify_ctx, &st);
+
+
+    struct t_cose_signature_verify_main verify_ecdsa;
+    struct t_cose_key                   ecdsa_key;
+    init_fixed_test_signing_key(T_COSE_ALGORITHM_ES256, &ecdsa_key);
+    t_cose_signature_verify_main_init(&verify_ecdsa);
+    t_cose_signature_verify_main_set_key(&verify_ecdsa,
+                                          ecdsa_key,
+                                          Q_USEFUL_BUF_FROM_SZ_LITERAL("ecsda_kid"));
+    t_cose_sign_add_verifier(&verify_ctx, (struct t_cose_signature_verify *)&verify_ecdsa);
+
+    err = t_cose_sign_verify(&verify_ctx,
+                              cose_sign,
+                              Q_USEFUL_BUF_FROM_SZ_LITERAL("SAMPLE AAD"),
+                             &payload,
+                              NULL);
+
+    /* Not all verifier were configured, but verify all was requested so
+     * decline is expected */
+
+    if(err != T_COSE_ERR_DECLINE) {
+        return 11;
+    }
+
+    struct t_cose_signature_verify_eddsa verify_eddsa;
+    struct t_cose_key                   eddsa_key;
+    init_fixed_test_signing_key(T_COSE_ALGORITHM_EDDSA, &eddsa_key);
+    t_cose_signature_verify_eddsa_init(&verify_eddsa, 0);  // TODO: why does this have option flags and _main_ doesn't
+    t_cose_signature_verify_eddsa_set_key(&verify_eddsa,
+                                           eddsa_key,
+                                           Q_USEFUL_BUF_FROM_SZ_LITERAL("eddsa_kid"));
+    t_cose_signature_verify_eddsa_set_auxiliary_buffer(&verify_eddsa, auxiliary_buffer);
+    t_cose_sign_add_verifier(&verify_ctx, (struct t_cose_signature_verify *)&verify_eddsa);
+
+
+    struct t_cose_signature_verify_main verify_rsa;
+    struct t_cose_key                   rsa_key;
+    init_fixed_test_signing_key(T_COSE_ALGORITHM_PS256, &rsa_key);
+    t_cose_signature_verify_main_init(&verify_rsa);
+    t_cose_signature_verify_main_set_key(&verify_rsa,
+                                          rsa_key,
+                                          Q_USEFUL_BUF_FROM_SZ_LITERAL("rsa_kid"));
+    t_cose_sign_add_verifier(&verify_ctx, (struct t_cose_signature_verify *)&verify_rsa);
+
+    err = t_cose_sign_verify(&verify_ctx,
+                              cose_sign,
+                              Q_USEFUL_BUF_FROM_SZ_LITERAL("SAMPLE AAD"),
+                             &payload,
+                              NULL);
+
+    if(err) {
+        return 3;
+    }
+
+    return 0;
+}
+
+
+
+static int32_t
+check_multi_params(const struct t_cose_parameter *decoded_params)
+{
+    // Very lazy check...
+    int64_t xxx = 0;
+    while(decoded_params != NULL) {
+        if(decoded_params->label == T_COSE_HEADER_PARAM_ALG) {
+            if(decoded_params->value_type != T_COSE_PARAMETER_TYPE_INT64) {
+                return 1;
+            }
+            xxx += decoded_params->value.int64;
+        }
+        decoded_params = decoded_params->next;
+    }
+
+    int64_t yyy = T_COSE_ALGORITHM_ES256 + T_COSE_ALGORITHM_EDDSA + T_COSE_ALGORITHM_PS256;
+    if(xxx != yyy) {
+        return 2;
+    }
+
+    return 0;
+}
+
+
+int32_t decode_only_multi_test(void)
+{
+    enum t_cose_err_t                   err;
+    MakeUsefulBufOnStack(               cose_sign_buf, 700);
+    struct q_useful_buf_c               cose_sign;
+    struct t_cose_parameter             param_pool[25];
+    struct t_cose_sign_verify_ctx       verify_ctx;
+    struct q_useful_buf_c               payload;
+    struct t_cose_signature_verify_main verify_ecdsa;
+    struct t_cose_parameter_storage      st;
+    struct t_cose_signature_verify_eddsa verify_eddsa;
+    struct t_cose_signature_verify_main  verify_rsa;
+    struct t_cose_parameter             *decoded_params;
+    size_t                               aux_size;
+
+
+    if (!t_cose_is_algorithm_supported(T_COSE_ALGORITHM_ES256) ||
+        !t_cose_is_algorithm_supported(T_COSE_ALGORITHM_EDDSA) ||
+        !t_cose_is_algorithm_supported(T_COSE_ALGORITHM_PS256)) {
+        return INT32_MIN; /* Means no testing was actually done */
+    }
+    /* This requires EdDSA, RSA and ECDSA. Since PSA doesn't support EdDSA,
+     * this can only run with OpenSSL.
+     */
+    err = make_triple_signed(cose_sign_buf, &cose_sign);
+    if(err) {
+        return 1000 + (int32_t)err;
+    }
+
+    /* --- First run with no verifiers ---- */
+    t_cose_sign_verify_init(&verify_ctx, T_COSE_OPT_MESSAGE_TYPE_SIGN | T_COSE_OPT_DECODE_ONLY);
+    T_COSE_PARAM_STORAGE_INIT(st, param_pool);
+    t_cose_sign_add_param_storage(&verify_ctx, &st);
+
+    err = t_cose_sign_verify(&verify_ctx,
+                              cose_sign,
+                              Q_USEFUL_BUF_FROM_SZ_LITERAL("SAMPLE AAD"),
+                             &payload,
+                             &decoded_params);
+
+    if(err) {
+        return 2000 + (int32_t)err;
+    }
+
+    if(check_multi_params(decoded_params)) {
+        return 2500;
+    }
+
+
+    /* --- Second run with all verifiers ---- */
+    t_cose_signature_verify_main_init(&verify_ecdsa);
+    t_cose_sign_add_verifier(&verify_ctx, (struct t_cose_signature_verify *)&verify_ecdsa);
+
+    t_cose_signature_verify_eddsa_init(&verify_eddsa, 0);
+    t_cose_sign_add_verifier(&verify_ctx, (struct t_cose_signature_verify *)&verify_eddsa);
+
+    t_cose_signature_verify_main_init(&verify_rsa);
+    t_cose_sign_add_verifier(&verify_ctx, (struct t_cose_signature_verify *)&verify_rsa);
+
+    err = t_cose_sign_verify(&verify_ctx,
+                              cose_sign,
+                              Q_USEFUL_BUF_FROM_SZ_LITERAL("SAMPLE AAD"),
+                             &payload,
+                             &decoded_params);
+
+    if(err) {
+        return 3000 + (int32_t)err;
+    }
+
+    aux_size = t_cose_signature_verify_eddsa_auxiliary_buffer_size(&verify_eddsa);
+    if(aux_size < 10 || aux_size > 1000) {
+        /* Just make sure it is in a reasonable range */
+        return 3600;
+    }
+
+    if(check_multi_params(decoded_params)) {
+        return 3500;
+    }
+
+
+    /* --- Third run with only EdDSA verifier ---- */
+     t_cose_signature_verify_eddsa_init(&verify_eddsa, 0);
+     t_cose_sign_add_verifier(&verify_ctx, (struct t_cose_signature_verify *)&verify_eddsa);
+
+     err = t_cose_sign_verify(&verify_ctx,
+                               cose_sign,
+                               Q_USEFUL_BUF_FROM_SZ_LITERAL("SAMPLE AAD"),
+                              &payload,
+                              &decoded_params);
+
+     if(err) {
+         return 4000 + (int32_t)err;
+     }
+
+     aux_size = t_cose_signature_verify_eddsa_auxiliary_buffer_size(&verify_eddsa);
+     if(aux_size < 10 || aux_size > 1000) {
+         /* Just make sure it is in a reasonable range */
+         return 4600;
+     }
+
+    if(check_multi_params(decoded_params)) {
+        return 4500;
+    }
+
+
+    /* --- Fourth run with only main verifier ---- */
+     t_cose_signature_verify_eddsa_init(&verify_eddsa, 0);
+     t_cose_sign_add_verifier(&verify_ctx, (struct t_cose_signature_verify *)&verify_eddsa);
+
+     err = t_cose_sign_verify(&verify_ctx,
+                               cose_sign,
+                               Q_USEFUL_BUF_FROM_SZ_LITERAL("SAMPLE AAD"),
+                              &payload,
+                              &decoded_params);
+
+     if(err) {
+         return 5000 + (int32_t)err;
+     }
+
+    if(check_multi_params(decoded_params)) {
+        return 5500;
+    }
+
+    return 0;
+}
+
+
+
+#endif /* !T_COSE_DISABLE_COSE_SIGN */
+
+
+/*
+
+ Conditions:
+ - Require all three to verify and see success
+ - Require all three where one fails
+ - Require one sig and the 3rd one succeeds
+ - Require one sig and none succeed because they all decline
+ - Require one sig and one fails because the data is corrupt/key is wrong
+
+- Use one message signed with ES256, EdDSA and RS2048
+
+
+ */
+
+#if defined(T_COSE_USE_PSA_CRYPTO)
+/* Include the PSA crypto adapter header so that PSA_CRYPTO_HAS_RESTARTABLE_SIGNING
+ * is defined for the next condition
+ */
+#include "../crypto_adapters/t_cose_psa_crypto.h"
+#endif
+
+
+
+
+#if (defined(T_COSE_USE_PSA_CRYPTO) && PSA_CRYPTO_HAS_RESTARTABLE_SIGNING) || \
+     defined(T_COSE_USE_B_CON_SHA256)
+
+#if defined(T_COSE_USE_PSA_CRYPTO)
+    #define DECLARE_DEFAULT_ALGORITHM_ID(alg_id) \
+        int32_t alg_id = T_COSE_ALGORITHM_ES256
+    #define DECLARE_RESTARTABLE_CONTEXT(crypto_ctx) \
+        psa_interruptible_set_max_ops(0); \
+        struct t_cose_psa_crypto_context crypto_ctx = {0}
+#else
+    /* Assume test crypto adapter */
+    #include "../crypto_adapters/t_cose_test_crypto.h"
+    #define DECLARE_DEFAULT_ALGORITHM_ID(alg_id) \
+        int32_t alg_id = T_COSE_ALGORITHM_SHORT_CIRCUIT_256
+    #define DECLARE_RESTARTABLE_CONTEXT(crypto_ctx) \
+        struct t_cose_test_crypto_context crypto_ctx = {0}
+#endif
+
+int32_t restart_test_2_step(void)
+{
+    QCBOREncodeContext              cbor_encode;
+    QCBORError                      qcbor_result;
+    struct t_cose_sign_sign_ctx     sign_ctx;
+    enum t_cose_err_t               result;
+    Q_USEFUL_BUF_MAKE_STACK_UB(     signed_cose_buffer, 200);
+    struct q_useful_buf_c           signed_cose;
+    struct t_cose_sign1_verify_ctx  verify_ctx;
+    struct q_useful_buf_c           payload =
+        Q_USEFUL_BUF_FROM_SZ_LITERAL("SAMPLE PAYLOAD");
+    int                             counter;
+    struct t_cose_key               key_pair;
+    struct t_cose_signature_sign_restart signer;
+
+    DECLARE_RESTARTABLE_CONTEXT(crypto_context);
+    DECLARE_DEFAULT_ALGORITHM_ID(cose_algorithm_id);
+
+    init_fixed_test_signing_key(cose_algorithm_id, &key_pair);
+
+    t_cose_signature_sign_restart_init(&signer, cose_algorithm_id);
+    t_cose_signature_sign_restart_set_crypto_context(&signer,
+                                                     &crypto_context);
+    t_cose_signature_sign_restart_set_signing_key(&signer, key_pair);
+
+    t_cose_sign_sign_init(&sign_ctx, T_COSE_OPT_MESSAGE_TYPE_SIGN1);
+    t_cose_sign_add_signer(&sign_ctx, t_cose_signature_sign_from_restart(&signer));
+
+    QCBOREncode_Init(&cbor_encode, signed_cose_buffer);
+
+    result = t_cose_sign_encode_start(&sign_ctx, &cbor_encode);
+    if(result != T_COSE_SUCCESS) {
+        return 1000 + (int32_t)result;
+    }
+
+    QCBOREncode_AddBytes(&cbor_encode, payload);
+
+    counter = 0;
+    do {
+        result = t_cose_sign_encode_finish(&sign_ctx,
+                                           NULL_Q_USEFUL_BUF_C,
+                                           payload,
+                                           &cbor_encode);
+        counter++;
+    } while(result == T_COSE_ERR_SIG_IN_PROGRESS);
+
+    if(result) {
+        return 2000 + (int32_t)result;
+    }
+    if(counter <= 1) {
+        return 3000;
+    }
+
+    qcbor_result = QCBOREncode_Finish(&cbor_encode, &signed_cose);
+    if(qcbor_result) {
+        return 4000 + (int32_t)qcbor_result;
+    }
+
+    /* --- Done making COSE Sign1 object  --- */
+
+    /* --- Start verifying the COSE Sign1 object  --- */
+    /* Select short circuit signing */
+    t_cose_sign1_verify_init(&verify_ctx, T_COSE_OPT_ALLOW_SHORT_CIRCUIT);
+    t_cose_sign1_set_verification_key(&verify_ctx, key_pair);
+
+    /* Run the signature verification */
+    result = t_cose_sign1_verify(&verify_ctx,
+                                 /* COSE to verify */
+                                 signed_cose,
+                                 /* The returned payload */
+                                 &payload,
+                                 /* Don't return parameters */
+                                 NULL);
+    if(result) {
+        return 5000 + (int32_t)result;
+    }
+
+
+    return 0;
+}
+#else
+int32_t restart_test_2_step(void)
+{
+    return 0;
+}
+#endif

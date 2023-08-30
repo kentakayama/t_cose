@@ -42,7 +42,7 @@ elseif(CRYPTO_PROVIDER STREQUAL "OpenSSL")
 
     find_package(OpenSSL REQUIRED)
     set(CRYPTO_LIBRARY OpenSSL::Crypto)
-    set(CRYPTO_COMPILE_DEFS -DT_COSE_USE_OPENSSL_CRYPTO=1 -DT_COSE_DISABLE_HPKE)
+    set(CRYPTO_COMPILE_DEFS -DT_COSE_USE_OPENSSL_CRYPTO=1)
     set(CRYPTO_ADAPTER_SRC crypto_adapters/t_cose_openssl_crypto.c)
 
 elseif(CRYPTO_PROVIDER STREQUAL "Test")
@@ -51,7 +51,7 @@ elseif(CRYPTO_PROVIDER STREQUAL "Test")
     target_include_directories(b_con_hash PUBLIC crypto_adapters/b_con_hash)
 
     set(CRYPTO_LIBRARY b_con_hash)
-    set(CRYPTO_COMPILE_DEFS -DT_COSE_USE_B_CON_SHA256 -DT_COSE_ENABLE_HASH_FAIL_TEST -DT_COSE_DISABLE_HPKE)
+    set(CRYPTO_COMPILE_DEFS -DT_COSE_USE_B_CON_SHA256 -DT_COSE_ENABLE_HASH_FAIL_TEST)
     set(CRYPTO_ADAPTER_SRC crypto_adapters/t_cose_test_crypto.c)
 
 else()
@@ -70,6 +70,7 @@ set(T_COSE_SRC_COMMON
     src/t_cose_sign_sign.c
     src/t_cose_mac_compute.c
     src/t_cose_signature_sign_main.c
+    src/t_cose_signature_sign_restart.c
     src/t_cose_signature_sign_eddsa.c
     src/t_cose_sign_verify.c
     src/t_cose_mac_validate.c
@@ -79,9 +80,9 @@ set(T_COSE_SRC_COMMON
     src/t_cose_encrypt_dec.c
     src/t_cose_recipient_dec_keywrap.c
     src/t_cose_recipient_enc_keywrap.c
-    src/t_cose_recipient_dec_hpke.c
-    src/t_cose_recipient_enc_hpke.c
-    src/hpke.c
+    src/t_cose_recipient_dec_esdh.c
+    src/t_cose_recipient_enc_esdh.c
+    src/t_cose_qcbor_gap.c
 )
 
 find_package(QCBOR REQUIRED)
@@ -107,6 +108,7 @@ if (BUILD_EXAMPLES)
         examples/print_buf.c
         examples/signing_examples.c
         examples/encryption_examples.c
+        examples/example_keys.c
     )
 
     if (CRYPTO_PROVIDER STREQUAL "MbedTLS")
@@ -136,23 +138,23 @@ if (BUILD_TESTS)
     set(TEST_SRC_COMMON
         main.c
         test/run_tests.c
-        test/t_cose_make_test_messages.c
-        test/t_cose_test.c
+        test/t_cose_compute_validate_mac_test.c
         test/t_cose_crypto_test.c
-        test/t_cose_param_test.c
         test/t_cose_encrypt_decrypt_test.c
+        test/t_cose_make_test_messages.c
+        test/t_cose_param_test.c
+        test/t_cose_test.c
+        examples/example_keys.c
     )
 
     if (NOT CRYPTO_PROVIDER STREQUAL "Test")
-        list(APPEND TEST_SRC_COMMON test/t_cose_sign_verify_test.c test/t_cose_compute_validate_mac_test.c)
+        list(APPEND TEST_SRC_COMMON test/t_cose_sign_verify_test.c)
     endif()
 
     if (CRYPTO_PROVIDER STREQUAL "MbedTLS")
         set(TEST_SRC_EXTRA examples/init_keys_psa.c)
-        set(TEST_EXTRA_DEFS -DT_COSE_DISABLE_MAC0)
     elseif(CRYPTO_PROVIDER STREQUAL "OpenSSL")
         set(TEST_SRC_EXTRA examples/init_keys_ossl.c)
-        set(TEST_EXTRA_DEFS -DT_COSE_DISABLE_MAC0)
     elseif(CRYPTO_PROVIDER STREQUAL "Test")
         set(TEST_SRC_EXTRA examples/init_keys_test.c)
         set(TEST_EXTRA_DEFS -DT_COSE_ENABLE_HASH_FAIL_TEST -DT_COSE_DISABLE_SIGN_VERIFY_TESTS)
@@ -165,7 +167,7 @@ if (BUILD_TESTS)
     target_link_libraries(t_cose_test PRIVATE t_cose ${CRYPTO_LIBRARY})
     # Crypto defs are needed because the tests include headers from src/
     target_compile_definitions(t_cose_test PRIVATE ${CRYPTO_COMPILE_DEFS} ${TEST_EXTRA_DEFS})
-    
+
     add_test(NAME t_cose_test COMMAND t_cose_test)
 
 endif()

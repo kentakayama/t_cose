@@ -39,6 +39,8 @@
  * keys returned here to work for certain with all crypto libraries
  * even though some don't require it.
  *
+ * TODO: should this be by curve instead of signing algorithm?
+ *
  */
 enum t_cose_err_t
 init_fixed_test_signing_key(int32_t            cose_algorithm_id,
@@ -51,38 +53,37 @@ free_fixed_signing_key(struct t_cose_key key_pair);
 
 
 
-/* This is for key pairs for HPKE encryption (not symmetric
- * encryption). Lots still to figure out here especially
- * considering HPKE is still in flux.
+/**
+ * \brief Initialize two key handles with public and private for test
  *
- * (It's fairly difficult (for me) to fully understand how key material
- * here works. There's a lot of variability (curves, serialization format,
- * generation algorithms). IMO, the APIs for these are not well documented,
- * nor are the tools. And then there's politics and opinionated
- * people...
- * Expect this to evolve...).
+ * \param[in]  cose_ec_curve_id   Curve for the key pair
+ * \param[out] public_key         Handle for public key of the pair
+ * \param[out] private_key        Handle for the private key of the pair.
  *
- * The implementaiton of this can be crypto-library
- * dependent, but the actual example and test for HPKE can not.
- * It's only the key material inialization in t_cose that is
- * crypto-library dependent.
+ * This is for key pairs for EC encryption. Typically this gets fed
+ * into ECDH either for HPKE or the RFC 9053 COSE encryption key
+ * distrubution methods.
  *
- * Public key and private key are separate because it's not clear
- * if crypto libraries support a key pair here.
+ * The curve and number of bits are associated with the key not with
+ * the encryption algorithm, so this takes the COSE EC curve ID as an
+ * argument, not the encryption algorithm.
  *
- * These keys are used with ECDH. (With ECDSA it's possible
- * to have a key pair in one key handle with OpenSSL and Mbed TLS,
- * but not sure about ECDH) What about other libraries?
+ * While the crypto library representation of a private key usually
+ * also includes the public key, they are separate here as in the real
+ * world the encryptor and decryptor will not be the same. In the real
+ * world, the encryptor will not have the private key.
+ *
+ * Both keys returned here must be freed with
+ * free_fixed_test_ec_encryption_key().
  */
-
 enum t_cose_err_t
-init_fixed_test_encryption_key(int32_t            cose_algorithm_id,
-                               struct t_cose_key *public_key,
-                               struct t_cose_key *private_key);
+init_fixed_test_ec_encryption_key(int32_t            cose_ec_curve_id,
+                                  struct t_cose_key *public_key,
+                                  struct t_cose_key *private_key);
 
 
 void
-free_fixed_test_encryption_key(struct t_cose_key key_pair);
+free_fixed_test_ec_encryption_key(struct t_cose_key key);
 
 
 

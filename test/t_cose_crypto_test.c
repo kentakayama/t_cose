@@ -9,6 +9,7 @@
  */
 
 #include "t_cose_crypto_test.h"
+#include "init_keys.h"
 
 #include "../src/t_cose_crypto.h" /* NOT a public interface so this test can't run against an installed library */
 
@@ -42,7 +43,7 @@ static const uint8_t expected_empty_tag[] = {
     0xC9, 0x4A, 0xA9, 0xF3, 0x22, 0x75, 0x73, 0x8C, 0xD5, 0xCC, 0x75, 0x01, 0xA4, 0x80, 0xBC, 0xF5};
 #endif
 
-int_fast32_t aead_test(void)
+int32_t aead_test(void)
 {
     enum t_cose_err_t      err;
     int32_t                cose_algorithm_id;
@@ -60,7 +61,7 @@ int_fast32_t aead_test(void)
                                                   UsefulBuf_FROM_BYTE_ARRAY_LITERAL(test_key_0_128bit),
                                                  &key);
     if(err) {
-        return 1000 + (int_fast32_t)err;
+        return 1000 + (int32_t)err;
     }
 
     /* First the simplest case, no payload, no aad, just the tag */
@@ -72,7 +73,7 @@ int_fast32_t aead_test(void)
                                      ciphertext_buffer,
                                      &ciphertext);
     if(err) {
-        return 2000 + (int_fast32_t)err;
+        return 2000 + (int32_t)err;
     }
 
     /* TODO: proper define to know about test crypto */
@@ -101,7 +102,7 @@ int_fast32_t aead_test(void)
                                      &plaintext);
 
     if(err) {
-        return 3000 + (int_fast32_t)err;
+        return 3000 + (int32_t)err;
     }
 
     if(plaintext.len != 0) {
@@ -118,7 +119,7 @@ int_fast32_t aead_test(void)
                                      ciphertext_buffer,
                                      &ciphertext);
     if(err) {
-        return 4000 + (int_fast32_t)err;
+        return 4000 + (int32_t)err;
     }
 
     err = t_cose_crypto_aead_decrypt(cose_algorithm_id,
@@ -129,7 +130,7 @@ int_fast32_t aead_test(void)
                                      plaintext_buffer,
                                      &plaintext);
     if(err) {
-        return 5000 + (int_fast32_t)err;
+        return 5000 + (int32_t)err;
     }
 
     if(q_useful_buf_compare(Q_USEFUL_BUF_FROM_SZ_LITERAL("plain text"), plaintext)) {
@@ -149,7 +150,7 @@ int_fast32_t aead_test(void)
 
 #ifndef T_COSE_DISABLE_KEYWRAP
 
-int_fast32_t kw_test(void)
+int32_t kw_test(void)
 {
     struct t_cose_key kek;
     /* These are test vectors from RFC 3394 */
@@ -172,7 +173,7 @@ int_fast32_t kw_test(void)
          * this dynamically. The below tests will correctly link
          * on 2.28, but will fail to run so this exception is needed.
          */
-        return 0;
+        return INT32_MIN; /* Means no testing was actually done */
     }
 
     e = t_cose_crypto_make_symmetric_key_handle(T_COSE_ALGORITHM_A128GCM,
@@ -275,7 +276,7 @@ static const uint8_t tc1_okm_bytes[] = {
 };
 #endif
 
-int_fast32_t hkdf_test(void)
+int32_t hkdf_test(void)
 {
     Q_USEFUL_BUF_MAKE_STACK_UB(tc1_okm, 42);
     enum t_cose_err_t          err;
@@ -298,7 +299,147 @@ int_fast32_t hkdf_test(void)
                             okm)) {
         return 2;
     }
+#else
+    (void)okm;
 #endif
 
     return 0;
 }
+
+#ifndef T_COSE_USE_B_CON_SHA256 /* test crypto doesn't support ECDH */
+
+/* Expected result for cose_ex_P_256_key_pair_der. */
+static const uint8_t expected_ecdh_p256[] = {
+    0xE6, 0xBE, 0xF9, 0xB9, 0x91, 0x0C, 0xD1, 0x5A,
+    0x20, 0xEF, 0x49, 0xB2, 0x40, 0x31, 0x0C, 0x8B,
+    0xFC, 0x81, 0xDB, 0xAD, 0xBE, 0x63, 0x92, 0x7E,
+    0xB2, 0x15, 0xB5, 0xAE, 0x01, 0x1E, 0x51, 0xEB};
+
+int32_t ecdh_test(void)
+{
+    enum t_cose_err_t           err;
+    struct t_cose_key           public_key;
+    struct t_cose_key           private_key;
+    struct q_useful_buf_c       shared_key;
+    Q_USEFUL_BUF_MAKE_STACK_UB( shared_key_buf, T_COSE_EXPORT_PUBLIC_KEY_MAX_SIZE);
+
+
+    err = init_fixed_test_ec_encryption_key(T_COSE_ELLIPTIC_CURVE_P_256,
+                                           &public_key,
+                                           &private_key);
+    if(err != T_COSE_SUCCESS) {
+        return -1;
+    }
+
+    err = t_cose_crypto_ecdh(private_key,
+                             public_key,
+                             shared_key_buf,
+                            &shared_key);
+
+    if(err != T_COSE_SUCCESS) {
+        return (int32_t)err;
+    }
+
+    /* The main point of this test is that the same result comes from
+     * all the crypto libraries integrated. */
+    if(q_useful_buf_compare(Q_USEFUL_BUF_FROM_BYTE_ARRAY_LITERAL(expected_ecdh_p256), shared_key)) {
+        return 44;
+    }
+
+    free_fixed_test_ec_encryption_key(public_key);
+    free_fixed_test_ec_encryption_key(private_key);
+
+    return 0;
+
+}
+
+
+/* X coordinate from cose_ex_P_256_key_pair_der. */
+static const uint8_t x_coord_P_256[] = {
+    0x65, 0xed, 0xa5, 0xa1, 0x25, 0x77, 0xc2, 0xba,
+    0xe8, 0x29, 0x43, 0x7f, 0xe3, 0x38, 0x70, 0x1a,
+    0x10, 0xaa, 0xa3, 0x75, 0xe1, 0xbb, 0x5b, 0x5d,
+    0xe1, 0x08, 0xde, 0x43, 0x9c, 0x08, 0x55, 0x1d,
+};
+
+static const uint8_t y_coord_P_256[] = {
+    0x1e, 0x52, 0xed, 0x75, 0x70, 0x11, 0x63, 0xf7,
+    0xf9, 0xe4, 0x0d, 0xdf, 0x9f, 0x34, 0x1b, 0x3d,
+    0xc9, 0xba, 0x86, 0x0a, 0xf7, 0xe0, 0xca, 0x7c,
+    0xa7, 0xe9, 0xee, 0xcd, 0x00, 0x84, 0xd1, 0x9c,
+};
+
+int32_t ec_import_export_test(void)
+{
+    enum t_cose_err_t      err;
+    struct t_cose_key      public_key;
+    struct t_cose_key      private_key;
+    struct t_cose_key      public_key_next;
+    MakeUsefulBufOnStack(  x_coord_buf, T_COSE_BITS_TO_BYTES(T_COSE_ECC_MAX_CURVE_BITS));
+    MakeUsefulBufOnStack(  y_coord_buf, T_COSE_BITS_TO_BYTES(T_COSE_ECC_MAX_CURVE_BITS));
+    struct q_useful_buf_c  x_coord;
+    struct q_useful_buf_c  y_coord;
+    bool                   y_sign;
+    int32_t                curve;
+
+    err = init_fixed_test_ec_encryption_key(T_COSE_ELLIPTIC_CURVE_P_256,
+                                           &public_key,
+                                           &private_key);
+    if(err) {
+        return 1;
+    }
+
+    err = t_cose_crypto_export_ec2_key(public_key,
+                                      &curve,
+                                       x_coord_buf,
+                                      &x_coord,
+                                       y_coord_buf,
+                                      &y_coord,
+                                      &y_sign);
+    if(err) {
+        return 2;
+    }
+
+    err = t_cose_crypto_import_ec2_pubkey(curve,
+                                          x_coord,
+                                          y_coord,
+                                          y_sign,
+                                          &public_key_next);
+    if(err) {
+        return 3;
+    }
+
+    err = t_cose_crypto_export_ec2_key(public_key_next,
+                                      &curve,
+                                       x_coord_buf,
+                                      &x_coord,
+                                       y_coord_buf,
+                                      &y_coord,
+                                      &y_sign);
+
+    free_fixed_test_ec_encryption_key(public_key);
+    free_fixed_test_ec_encryption_key(private_key);
+
+
+    if(err) {
+        return 4;
+    }
+
+    if(curve != T_COSE_ELLIPTIC_CURVE_P_256) {
+        return 5;
+    }
+
+    if(q_useful_buf_compare(x_coord, Q_USEFUL_BUF_FROM_BYTE_ARRAY_LITERAL(x_coord_P_256) )) {
+        return 6;
+    }
+
+
+    if(q_useful_buf_compare(y_coord, Q_USEFUL_BUF_FROM_BYTE_ARRAY_LITERAL(y_coord_P_256) )) {
+        return 6;
+    }
+
+    return 0;
+}
+
+
+#endif /* T_COSE_USE_B_CON_SHA256 */

@@ -1,8 +1,8 @@
 /*
  * t_cose_crypto.h
  *
- * Copyright 2019-2022, Laurence Lundblade
- * Copyright (c) 2020-2022, Arm Limited. All rights reserved.
+ * Copyright 2019-2023, Laurence Lundblade
+ * Copyright (c) 2020-2023, Arm Limited. All rights reserved.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  *
@@ -20,10 +20,13 @@
 #include "t_cose/t_cose_standard_constants.h"
 #include "t_cose/t_cose_key.h"
 
+
 #ifdef __cplusplus
 extern "C" {
+#if 0
+} /* Keep editor indention formatting happy */
 #endif
-
+#endif
 
 
 
@@ -83,8 +86,6 @@ extern "C" {
  * - Support for a new T_COSE_ALGORITHM_XXX signature algorithm
  *    - See t_cose_algorithm_is_ecdsa()
  *    - If not ECDSA add another function like t_cose_algorithm_is_ecdsa()
- * - Support for a new T_COSE_ALGORITHM_XXX signature algorithm is added
- *    - See \ref T_COSE_CRYPTO_MAX_HASH_SIZE for additional hashes
  * - Support another hash implementation that is not a service
  *    - See struct \ref t_cose_crypto_hash
  *
@@ -106,7 +107,7 @@ extern "C" {
 /** Constant for maximum ECC curve size in bits */
 #define T_COSE_ECC_MAX_CURVE_BITS 521
 
-
+/** Export of EC key in SEC1 uncompressed format */
 #define T_COSE_EXPORT_ECC_PUBLIC_KEY_MAX_SIZE(key_bits)                         \
     (2 * T_COSE_BITS_TO_BYTES(key_bits) + 1)
 
@@ -130,6 +131,11 @@ extern "C" {
                               (input_length) + 1) +                             \
      T_COSE_CIPHER_IV_MAX_SIZE)
 
+/** The maximum output size of the symmetric produced by a key agreement algorithm, in bytes.
+ *  If we support an ECC curve with 521 bits, then the value below must be set to 66 bytes
+ *  because ceil( 521 / 8 ) = 66 bytes.
+ */
+#define T_COSE_RAW_KEY_AGREEMENT_OUTPUT_MAX_SIZE 66
 
 #define T_COSE_EC_P256_SIG_SIZE 64  /* size for secp256r1 */
 #define T_COSE_EC_P384_SIG_SIZE 96  /* size for secp384r1 */
@@ -269,6 +275,43 @@ t_cose_crypto_sign(int32_t                cose_algorithm_id,
 
 
 /**
+ * \brief Perform public key signing in a restartable manner. Part of the t_cose
+ * crypto adaptation layer.
+ *
+ * \param[in] started           If false, then this is the first call of a
+ *                              signing operation. If it is true, this is a
+ *                              subsequent call.
+ *
+ * \retval T_COSE_ERR_SIG_IN_PROGRESS
+ *         Signing is in progress, the function needs to be called again with
+ *         the same parameters.
+ *
+ * For other parameters and possible return values and general description see
+ * t_cose_crypto_sign.
+ *
+ * To complete a signing operation this function needs to be called multiple
+ * times. For a signing operation the first call to this function must happen
+ * with \c started == false, and all subsequent calls for this signing operation
+ * must happen with \c started == true. When the return value is
+ * \c T_COSE_ERR_SIG_IN_PROGRESS the data in the output parameters is undefined.
+ * The function must be called again (and again...) until \c T_COSE_SUCCESS or
+ * an error is returned.
+ *
+ * Note that this function is only implemented if the crypto adapter supports
+ * restartable operation, and even in that case it might not be available for
+ * all algorithms.
+ */
+enum t_cose_err_t
+t_cose_crypto_sign_restart(bool                   started,
+                           int32_t                cose_algorithm_id,
+                           struct t_cose_key      signing_key,
+                           void                  *crypto_context,
+                           struct q_useful_buf_c  hash_to_sign,
+                           struct q_useful_buf    signature_buffer,
+                           struct q_useful_buf_c *signature);
+
+
+/**
  * \brief Perform public key signature verification. Part of the
  * t_cose crypto adaptation layer.
  *
@@ -281,17 +324,12 @@ t_cose_crypto_sign(int32_t                cose_algorithm_id,
  *                              locally (\c \#define) if the needed one
  *                              hasn't been registered.
  * \param[in] verification_key  The verification key to use.
- * \param[in] kid               The COSE kid (key ID) or \c NULL_Q_USEFUL_BUF_C.
  * \param[in] crypto_context       Pointer to adaptor-specific context. May be NULL.
  * \param[in] hash_to_verify    The hash of the data that is to be verified.
  * \param[in] signature         The COSE-format signature.
  *
  * This verifies that the \c signature passed in was over the \c
  * hash_to_verify passed in.
- *
- * The public key used to verify the signature is selected by the \c
- * kid if it is not \c NULL_Q_USEFUL_BUF_C or the \c key_select if it
- * is.
  *
  * The key selected must be, or include, a public key of the correct
  * type for \c cose_algorithm_id.
@@ -305,9 +343,6 @@ t_cose_crypto_sign(int32_t                cose_algorithm_id,
  *         Signature verification failed. For example, the
  *         cryptographic operations completed successfully but hash
  *         wasn't as expected.
- * \retval T_COSE_ERR_UNKNOWN_KEY
- *         The key identified by \c key_select or a \c kid was
- *         not found.
  * \retval T_COSE_ERR_WRONG_TYPE_OF_KEY
  *         The key was found, but it was the wrong type
  *         for the operation.
@@ -325,12 +360,10 @@ t_cose_crypto_sign(int32_t                cose_algorithm_id,
 enum t_cose_err_t
 t_cose_crypto_verify(int32_t               cose_algorithm_id,
                      struct t_cose_key     verification_key,
-                     struct q_useful_buf_c kid,
                      void                  *crypto_context,
                      struct q_useful_buf_c hash_to_verify,
                      struct q_useful_buf_c signature);
 
-#ifndef T_COSE_DISABLE_EDDSA
 
 /**
  * \brief Perform public key signing for EdDSA.
@@ -396,7 +429,6 @@ t_cose_crypto_sign_eddsa(struct t_cose_key      signing_key,
  * an incrementally computed hash.
  *
  * \param[in] verification_key  The verification key to use.
- * \param[in] kid               The COSE kid (key ID) or \c NULL_Q_USEFUL_BUF_C.
  * \param[in] tbs               The data to be verified.
  * \param[in] signature         The COSE-format signature.
  *
@@ -409,9 +441,6 @@ t_cose_crypto_sign_eddsa(struct t_cose_key      signing_key,
  *         Signature verification failed. For example, the
  *         cryptographic operations completed successfully but hash
  *         wasn't as expected.
- * \retval T_COSE_ERR_UNKNOWN_KEY
- *         The key identified by \c key_select or a \c kid was
- *         not found.
  * \retval T_COSE_ERR_WRONG_TYPE_OF_KEY
  *         The key was found, but it was the wrong type
  *         for the operation.
@@ -428,11 +457,10 @@ t_cose_crypto_sign_eddsa(struct t_cose_key      signing_key,
  */
 enum t_cose_err_t
 t_cose_crypto_verify_eddsa(struct t_cose_key     verification_key,
-                           struct q_useful_buf_c kid,
                            void                  *crypto_context,
                            struct q_useful_buf_c tbs,
                            struct q_useful_buf_c signature);
-#endif /* T_COSE_DISABLE_EDDSA */
+
 
 #ifdef T_COSE_USE_PSA_CRYPTO
 #include "psa/crypto.h"
@@ -498,7 +526,6 @@ struct t_cose_crypto_hash {
         /* --- The context for OpenSSL crypto --- */
         EVP_MD_CTX  *evp_ctx;
         int          update_error; /* Used to track error return by SHAXXX_Update() */
-        int32_t      cose_hash_alg_id; /* COSE integer ID for the hash alg */
 
    #elif T_COSE_USE_B_CON_SHA256
         /* --- Specific context for Brad Conte's sha256.c --- */
@@ -524,6 +551,12 @@ struct t_cose_crypto_hmac {
     #ifdef T_COSE_USE_PSA_CRYPTO
         /* --- The context for PSA Crypto (MBed Crypto) --- */
         psa_mac_operation_t op_ctx;
+
+    #elif T_COSE_USE_OPENSSL_CRYPTO
+        /* --- The context for OpenSSL crypto --- */
+        EVP_MD_CTX  *evp_ctx;
+        EVP_PKEY    *evp_pkey;
+
     #else
         /* --- Default: generic pointer / handle --- */
         union {
@@ -533,25 +566,6 @@ struct t_cose_crypto_hmac {
         int64_t status;
     #endif
 };
-
-/**
- * The size of the output of SHA-256.
- *
- * (It is safe to define these independently here as they are
- * well-known and fixed. There is no need to reference
- * platform-specific headers and incur messy dependence.)
- */
-#define T_COSE_CRYPTO_SHA256_SIZE 32
-
-/**
- * The size of the output of SHA-384 in bytes.
- */
-#define T_COSE_CRYPTO_SHA384_SIZE 48
-
-/**
- * The size of the output of SHA-512 in bytes.
- */
-#define T_COSE_CRYPTO_SHA512_SIZE 64
 
 /**
  * Size of the signature (tag) output for the HMAC-SHA256.
@@ -569,23 +583,23 @@ struct t_cose_crypto_hmac {
 #define T_COSE_CRYPTO_HMAC512_TAG_SIZE   T_COSE_CRYPTO_SHA512_SIZE
 
 /**
- * Max size of the tag output for the HMAC operations.
+ * Max size of the tag output for the HMAC operations. This works up to SHA3-512.
  */
+/* TODO: should this vary with T_COSE_CRYPTO_MAX_HASH_SIZE? */
 #define T_COSE_CRYPTO_HMAC_TAG_MAX_SIZE  T_COSE_CRYPTO_SHA512_SIZE
 
 /**
- * The maximum needed to hold a hash. It is smaller and less stack is needed
- * if the larger hashes are disabled.
+ * Maximum size of the hash output
  */
-#if !defined(T_COSE_DISABLE_ES512) || !defined(T_COSE_DISABLE_PS512)
-    #define T_COSE_CRYPTO_MAX_HASH_SIZE T_COSE_CRYPTO_SHA512_SIZE
-#else
-    #if !defined(T_COSE_DISABLE_ES384) || !defined(T_COSE_DISABLE_PS384)
-        #define T_COSE_CRYPTO_MAX_HASH_SIZE T_COSE_CRYPTO_SHA384_SIZE
-    #else
-        #define T_COSE_CRYPTO_MAX_HASH_SIZE T_COSE_CRYPTO_SHA256_SIZE
-    #endif
-#endif
+#define T_COSE_CRYPTO_MAX_HASH_SIZE T_COSE_CRYPTO_SHA512_SIZE
+
+/**
+ * Max size of an HMAC key. RFC 2160 which says the key should be the block size of the hash
+ * function used and that a longer key is allowed, but doesn't increase security. The block size
+ * of SHA-512 is 1024 bits and of SHA3-224 is 1152. This constant is for internal buffers
+ * holding a key. It is set at 200, far above what is needed to be generous and because
+ * 200 bytes isn't very much. */
+#define T_COSE_CRYPTO_HMAC_MAX_KEY 200
 
 
 /**
@@ -790,7 +804,7 @@ t_cose_crypto_hmac_validate_finish(struct t_cose_crypto_hmac *hmac_ctx,
 
 
 
-
+// TODO: rename this to have hmac in its name
 static inline size_t t_cose_tag_size(int32_t cose_alg_id)
 {
     switch(cose_alg_id) {
@@ -804,24 +818,6 @@ static inline size_t t_cose_tag_size(int32_t cose_alg_id)
             return INT32_MAX;
     }
 }
-
-#ifndef T_COSE_DISABLE_SHORT_CIRCUIT_SIGN
-/*
- * Get the COSE Hash algorithm ID from the corresponding
- * COSE HMAC algorithm ID
- */
-static inline int32_t t_cose_hmac_to_hash_alg_id(int32_t cose_hamc_alg_id)
-{
-    switch(cose_hamc_alg_id) {
-        case T_COSE_ALGORITHM_HMAC256:
-            return T_COSE_ALGORITHM_SHA_256;
-
-        default:
-            return INT32_MAX;
-    }
-}
-#endif
-
 
 
 /**
@@ -846,28 +842,33 @@ t_cose_crypto_get_random(struct q_useful_buf    buffer,
                          size_t                 number,
                          struct q_useful_buf_c *random);
 
-/* TBD: Generate key */
-enum t_cose_err_t
-t_cose_crypto_generate_key(struct t_cose_key    *ephemeral_key,
-                           int32_t               cose_algorithm_id);
 
 /**
- * \brief Exports the public key
+ * \brief Requests generation of a public / private key pair.
  *
- * \param[in] key               Handle to key
- * \param[in] pk_buffer         Pointer and length of buffer into which
- *                              the resulting public key is put.
- * \param[out] pk_len               Length of public key out
+ * \param[in] cose_ec_curve_id   Curve identifier from COSE curve registry.
+ * \param[out] key                t_cose_key structure to hold the key pair
+ *
+ * This function will either return a key in form of a t_cose_key
+ * structure, or produce an error.
+ *
+ * For most crypto libraries, this must be freed by
+ * t_cose_crypto_free_ec_key();
  *
  * \retval T_COSE_SUCCESS
- *         Successfully exported the public key.
- * \retval T_COSE_ERR_PUBLIC_KEY_EXPORT_FAILED
- *         The public key export operation failed.
+ *         Successfully generated a public/private key pair
+ *
+ * \retval T_COSE_ERR_UNSUPPORTED_KEM_ALG
+ *         Unknown algorithm
+ *
+ * \retval T_COSE_ERR_KEY_GENERATION_FAILED
+ *         Key generation failed
  */
 enum t_cose_err_t
-t_cose_crypto_export_public_key(struct t_cose_key      key,
-                                struct q_useful_buf    pk_buffer,
-                                size_t                *pk_len);
+t_cose_crypto_generate_ec_key(int32_t            cose_ec_curve_id,
+                              struct t_cose_key *key);
+
+
 
 /**
  * \brief Exports key
@@ -980,32 +981,6 @@ t_cose_crypto_kw_unwrap(int32_t                 cose_algorithm_id,
                         struct q_useful_buf_c   ciphertext,
                         struct q_useful_buf     plaintext_buffer,
                         struct q_useful_buf_c  *plaintext_result);
-
-
-/**
- * \brief HPKE Decrypt Wrapper
- *
- * \param[in] cose_algorithm_id   COSE algorithm id
- * \param[in] pkE                 pkE buffer
- * \param[in] pkR                 pkR key
- * \param[in] ciphertext          Ciphertext buffer
- * \param[in] plaintext           Plaintext buffer
- * \param[out] plaintext_len      Length of the returned plaintext
- *
- * \retval T_COSE_SUCCESS
- *         HPKE decrypt operation was successful.
- * \retval T_COSE_ERR_UNSUPPORTED_KEY_EXCHANGE_ALG
- *         An unsupported algorithm was supplied to the function call.
- * \retval T_COSE_ERR_HPKE_DECRYPT_FAIL
- *         Decrypt operation failed.
- */
-enum t_cose_err_t
-t_cose_crypto_hpke_decrypt(int32_t                            cose_algorithm_id,
-                           struct q_useful_buf_c              pkE,
-                           struct t_cose_key                  pkR,
-                           struct q_useful_buf_c              ciphertext,
-                           struct q_useful_buf                plaintext,
-                           size_t                            *plaintext_len);
 
 
 /**
@@ -1157,6 +1132,34 @@ void
 t_cose_crypto_free_symmetric_key(struct t_cose_key key);
 
 
+/**
+ * \brief Elliptic curve diffie-helman.
+ *
+ * \param[in] private_key     The private EC Key
+ * \param[in] public_key      The public EC key
+ * \param[in] shared_key_buf  Buffer to write the derived shared key in to
+ * \param[out] shared_key     The derived shared key
+ *
+ *  This works works for NIST curves up to secp521r1.
+ *  It must work for key sizes up to T_COSE_EXPORT_PUBLIC_KEY_MAX_SIZE.
+ *
+ *  This should work for Edwards curves too. TODO: test this.
+ *
+ *  (The choice is made to focus just on ECDH because no
+ *  one really does finite field DH (aka classic DH) and
+ *  there's no expectation that any will be registered in
+ *  the COSE registry.  This also keeps the API simpler,
+ *  saves a little code and makes it more clear what
+ *  someone needs to implement in the adaptor and the
+ *  expected output and key sizes.)
+ */
+enum t_cose_err_t
+t_cose_crypto_ecdh(struct t_cose_key      private_key,
+                   struct t_cose_key      public_key,
+                   struct q_useful_buf    shared_key_buf,
+                   struct q_useful_buf_c *shared_key);
+
+
 
 /**
  * \brief RFC 5869 HKDF
@@ -1190,47 +1193,76 @@ t_cose_crypto_free_symmetric_key(struct t_cose_key key);
  * See RFC 5869 for a detailed description.
  */
 enum t_cose_err_t
-t_cose_crypto_hkdf(int32_t                cose_hash_algorithm_id,
-                   struct q_useful_buf_c  salt,
-                   struct q_useful_buf_c  ikm,
-                   struct q_useful_buf_c  info,
-                   struct q_useful_buf    okm_buffer);
+t_cose_crypto_hkdf(int32_t                     cose_hash_algorithm_id,
+                   const struct q_useful_buf_c salt,
+                   const struct q_useful_buf_c ikm,
+                   const struct q_useful_buf_c info,
+                   const struct q_useful_buf   okm_buffer);
 
 
 
-#ifdef WE_NEED_THESE_FOR_HPKE
-/* HPKE doesn't use the basic hkdf. */
-
-/** \brief HKDF extract
-
- * This provides the HKDF extract function defined in RFC 5869 for
- * various hash functions. This does not use prk_buffer as in/out
- * the way t_cose_crypto_hkdf() uses okm_buffer. Instead this
- * is more like the usual use of the pair of a buffer in and a
- * constant pointer and length for the value out.
-
+/* Import a COSE_Key in EC2 format into a key handle.
+ *
+ * \param[in] curve        EC curve from COSE curve registry.
+ * \param[in] x_coord      The X coordinate as a byte string.
+ * \param[in] y_coord      The Y coordinate or NULL.
+ * \param[in] y_bool       The Y sign bit when y_coord is NULL.
+ * \param[out] key_handle  The key handle.
+ *
+ * This doesn't do the actual CBOR decoding, just the import
+ * into a key handle for the crypto library.
+ *
+ * For most crypto libraries, this must be freed by
+ * t_cose_crypto_free_ec_key();
+ *
+ * The coordinates are as specified in SECG 1.
+ *
+ * TODO: also support the private key.
  */
 enum t_cose_err_t
-t_cose_crypto_hkdf_extract(int32_t                cose_hash_algorithm_id,
-                           struct q_useful_buf_c  salt,
-                           struct q_useful_buf_c  ikm,
-                           struct q_useful_buf    prk_buffer
-                           struct q_useful_buf_c *prk);
+t_cose_crypto_import_ec2_pubkey(int32_t               cose_ec_curve_id,
+                                struct q_useful_buf_c x_coord,
+                                struct q_useful_buf_c y_coord,
+                                bool                  y_bool,
+                                struct t_cose_key    *key_handle);
 
 
-/** \brief HKDF epxand
-
-* This provides the HKDF expand function defined in RFC 5869 for
-* various hash functions.
- * This use the okm_buffer as in/out like t_cose_crypto_hkdf().
-*/
+/* Export a key handle into COSE_Key in EC2 format.
+ *
+ * \param[in] key_handle   The key handle.
+ * \param[out] curve        EC curve from COSE curve registry.
+ * \param[out] x_coord_buf  Buffer in which to put X coordinate.
+ * \param[out] x_coord      The X coordinate as a byte string.
+ * \param[out] y_coord_buf  Buffer in which to put Y coordinate.
+ * \param[out] y_coord      The Y coordinate or NULL.
+ * \param[out] y_bool       The Y sign bit when y_coord is NULL.
+ *
+ * This doesn't do the actual CBOR decoding, just the export
+ * from a key handle for the crypto library.
+ *
+ * The coordinates are as specified in SECG 1.
+ *
+ * TODO: also support the private key.
+ * TODO: a way to turn point compression on / off?
+ */
 enum t_cose_err_t
-t_cose_crypto_hkdf_expand(int32_t                cose_hash_algorithm_id,
-                          struct q_useful_buf_c  prk,
-                          struct q_useful_buf_c  info,
-                          struct q_useful_buf    okm_buffer);
+t_cose_crypto_export_ec2_key(struct t_cose_key      key_handle,
+                             int32_t               *cose_ec_curve_id,
+                             struct q_useful_buf    x_coord_buf,
+                             struct q_useful_buf_c *x_coord,
+                             struct q_useful_buf    y_coord_buf,
+                             struct q_useful_buf_c *y_coord,
+                             bool                  *y_bool);
 
-#endif /* WE_NEED_THESE */
+/*
+ * Free an EC key handle.
+ *
+ * Frees a key allocated by t_cose_crypto_import_ec2_pubkey() or
+ * t_cose_crypto_generate_ec_key();
+ *
+ */
+void
+t_cose_crypto_free_ec_key(struct t_cose_key key_handle);
 
 #ifdef __cplusplus
 }

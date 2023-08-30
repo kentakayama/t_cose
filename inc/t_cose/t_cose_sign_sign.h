@@ -3,6 +3,7 @@
  *
  * Copyright (c) 2018-2023, Laurence Lundblade. All rights reserved.
  * Copyright (c) 2020, Michael Eckel
+ * Copyright (c) 2023, Arm Limited. All rights reserved.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  *
@@ -31,7 +32,7 @@ extern "C" {
  * \brief Create a \c COSE_Sign or \c COSE_Sign1 message.
  *
  * This creates a \c COSE_Sign1 or \c COSE_Sign message in compliance
- * with [COSE (RFC 9052)](https://tools.ietf.org/html/rfc9052).  A 
+ * with [COSE (RFC 9052)](https://tools.ietf.org/html/rfc9052). A
  * \c COSE_Sign1 or \c COSE_Sign message is a CBOR-encoded binary blob
  * that contains header parameters, a payload and a signature or
  * signatures.
@@ -56,7 +57,7 @@ extern "C" {
 /**
  * The context for creating a \c COSE_Sign1 or \c COSE_Sign message. The
  * allocates it and pass it to the functions here.  At
- * about 40  bytes it fits easily on the stack.
+ * about 44 bytes it fits easily on the stack.
  */
 struct t_cose_sign_sign_ctx {
     /* Private data structure */
@@ -64,6 +65,8 @@ struct t_cose_sign_sign_ctx {
     uint32_t                       option_flags;
     struct t_cose_signature_sign  *signers;
     struct t_cose_parameter       *added_body_parameters;
+    /* Fields related to restartable operation */
+    bool                           started;
 };
 
 
@@ -100,7 +103,7 @@ struct t_cose_sign_sign_ctx {
  * \param[in] context            The t_cose signing context.
  * \param[in] option_flags       One of \c T_COSE_OPT_XXXX.
  *
- * This initializes the \ref t_cose_sign_sign_ctx context. 
+ * This initializes the \ref t_cose_sign_sign_ctx context.
  * Either \ref T_COSE_OPT_MESSAGE_TYPE_SIGN1 or
  * \ref T_COSE_OPT_MESSAGE_TYPE_SIGN must be given for
  * \c option_flags to indicate which COSE message to produce.
@@ -384,12 +387,12 @@ t_cose_sign_sign_init(struct t_cose_sign_sign_ctx *me,
  * t_cose_sign_sign_aad() instead of this.
  */
 enum t_cose_err_t
-t_cose_sign_one_shot(struct t_cose_sign_sign_ctx *context,
-                     bool                         payload_is_detached,
-                     struct q_useful_buf_c        aad,
-                     struct q_useful_buf_c        payload,
-                     struct q_useful_buf          out_buf,
-                     struct q_useful_buf_c       *result);
+t_cose_sign_sign_private(struct t_cose_sign_sign_ctx *context,
+                         bool                         payload_is_detached,
+                         struct q_useful_buf_c        aad,
+                         struct q_useful_buf_c        payload,
+                         struct q_useful_buf          out_buf,
+                         struct q_useful_buf_c       *result);
 
 
 static inline enum t_cose_err_t
@@ -399,12 +402,12 @@ t_cose_sign_sign(struct t_cose_sign_sign_ctx *me,
                  struct q_useful_buf          out_buf,
                  struct q_useful_buf_c       *result)
 {
-    return t_cose_sign_one_shot(me,
-                                false,
-                                payload,
-                                aad,
-                                out_buf,
-                                result);
+    return t_cose_sign_sign_private(me,
+                                    false,
+                                    payload,
+                                    aad,
+                                    out_buf,
+                                    result);
 }
 
 
@@ -415,12 +418,12 @@ t_cose_sign_sign_detached(struct t_cose_sign_sign_ctx *me,
                           struct q_useful_buf          out_buf,
                           struct q_useful_buf_c       *result)
 {
-    return t_cose_sign_one_shot(me,
-                                true,
-                                detached_payload,
-                                aad,
-                                out_buf,
-                                result);
+    return t_cose_sign_sign_private(me,
+                                    true,
+                                    detached_payload,
+                                    aad,
+                                    out_buf,
+                                    result);
 }
 
 

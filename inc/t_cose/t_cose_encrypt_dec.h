@@ -98,8 +98,10 @@ struct t_cose_encrypt_dec_ctx {
     struct t_cose_key     cek;
 
     struct t_cose_parameter_storage   params;
-    struct t_cose_parameter           __params[T_COSE_NUM_VERIFY_DECODE_HEADERS];
+    struct t_cose_parameter           __params[T_COSE_NUM_DECODE_HEADERS];
     struct t_cose_parameter_storage  *p_storage;
+
+    uint64_t                         unprocessed_tag_nums[T_COSE_MAX_TAGS_TO_RETURN];
 
     struct q_useful_buf           extern_enc_struct_buffer;
 };
@@ -113,7 +115,7 @@ struct t_cose_encrypt_dec_ctx {
  *                                   Currently none.
  *
  * TODO: not all of the following is implemented
- * If \c option_flags includes either \ref T_COSE_OPT_MESSAGE_TYPE_ENCRYPT0 
+ * If \c option_flags includes either \ref T_COSE_OPT_MESSAGE_TYPE_ENCRYPT0
  * or \ref T_COSE_OPT_MESSAGE_TYPE_ENCRYPT then the input message must be
  * \c COSE_Encrypt0 or \c COSE_Encrypt respectively. The error
  * T_COSE_ERR_XXXXXX will be returned if the option_flags indicated
@@ -188,7 +190,7 @@ t_cose_encrypt_dec_add_recipient(struct t_cose_encrypt_dec_ctx *context,
  *
  * This is optionally called to increase the number of storage nodes
  * for COSE_Encrypt or COSE_Encrypt0 message with
- * T_COSE_NUM_VERIFY_DECODE_HEADERS header parameters.  Decoded
+ * T_COSE_NUM_DECODE_HEADERS header parameters.  Decoded
  * parameters are returned in a linked list of struct
  * t_cose_parameter.  The storage for the nodes in the list is not
  * dynamically allocated as there is no dynamic storage allocation
@@ -201,7 +203,7 @@ t_cose_encrypt_dec_add_recipient(struct t_cose_encrypt_dec_ctx *context,
  * returned by t_cose_sign_verify() and similar.
  *
  * By default, if this is not called there is internal storage for
- * \ref T_COSE_NUM_VERIFY_DECODE_HEADERS headers. If this is not
+ * \ref T_COSE_NUM_DECODE_HEADERS headers. If this is not
  * enough call this function to use external storage instead of the
  * internal. This replaces the internal storage. It does not add to
  * it.
@@ -311,6 +313,30 @@ t_cose_encrypt_dec_detached(struct t_cose_encrypt_dec_ctx *context,
                             struct t_cose_parameter      **returned_parameters);
 
 
+
+/**
+ * \brief Return unprocessed tags from most recent decryption.
+ *
+ * \param[in] context   The t_cose decryption context.
+ * \param[in] n         Index of the tag to return.
+ *
+ * \return  The tag value or \ref CBOR_TAG_INVALID64 if there is no tag
+ *          at the index or the index is too large.
+ *
+ * The 0th tag is the one for which the COSE message is the content. Loop
+ * from 0 up until \ref CBOR_TAG_INVALID64 is returned. The maximum
+ * is \ref T_COSE_MAX_TAGS_TO_RETURN.
+ *
+ * It will be necessary to call this for a general implementation
+ * of a CWT since sometimes the CWT tag is required. This is also
+ * useful for recursive processing of nested COSE signing, mac
+ * and encryption.
+ */
+static inline uint64_t
+t_cose_encrypt_dec_nth_tag(const struct t_cose_encrypt_dec_ctx *context,
+                           size_t                               n);
+
+
 /* ------------------------------------------------------------------------
  * Inline implementations of public functions defined above.
  */
@@ -375,6 +401,17 @@ t_cose_encrypt_dec(struct t_cose_encrypt_dec_ctx *me,
                                        plaintext_buffer,
                                        plaintext,
                                        returned_parameters);
+}
+
+
+static inline uint64_t
+t_cose_encrypt_dec_nth_tag(const struct t_cose_encrypt_dec_ctx *me,
+                           size_t                               n)
+{
+    if(n > T_COSE_MAX_TAGS_TO_RETURN) {
+        return CBOR_TAG_INVALID64;
+    }
+    return me->unprocessed_tag_nums[n];
 }
 
 #ifdef __cplusplus
