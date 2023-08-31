@@ -42,17 +42,17 @@ init_signing_key_from_xx(int32_t               cose_algorithm_id,
     switch(cose_algorithm_id) {
     case T_COSE_ALGORITHM_ES256:
         key_type        = PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1);
-        key_alg         = PSA_ALG_ECDSA(PSA_ALG_SHA_256);
+        key_alg         = PSA_ALG_DETERMINISTIC_ECDSA(PSA_ALG_SHA_256);
         break;
 
     case T_COSE_ALGORITHM_ES384:
         key_type        = PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1);
-        key_alg         = PSA_ALG_ECDSA(PSA_ALG_SHA_384);
+        key_alg         = PSA_ALG_DETERMINISTIC_ECDSA(PSA_ALG_SHA_384);
         break;
 
     case T_COSE_ALGORITHM_ES512:
         key_type        = PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1);
-        key_alg         = PSA_ALG_ECDSA(PSA_ALG_SHA_512);
+        key_alg         = PSA_ALG_DETERMINISTIC_ECDSA(PSA_ALG_SHA_512);
         break;
 
     case T_COSE_ALGORITHM_PS256:
