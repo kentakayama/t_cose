@@ -655,6 +655,19 @@ configure_pkey_context(EVP_PKEY_CTX* context, int32_t cose_algorithm_id)
         /* ECDSA doesn't need any further configuration of its context.
          * The parameters are inferred from the key.
          */
+#if OPENSSL_VERSION_NUMBER >= 0x30200000L
+#include <openssl/core_names.h>
+        /* supports Deterministic ECDSA */
+        OSSL_PARAM params[3];
+        unsigned int nonce_type = 1;
+        params[0] = OSSL_PARAM_construct_uint(OSSL_SIGNATURE_PARAM_NONCE_TYPE, &nonce_type);
+        params[1] = OSSL_PARAM_construct_utf8_string(OSSL_SIGNATURE_PARAM_DIGEST, SN_sha256, sizeof(SN_sha256));
+        params[2] = OSSL_PARAM_construct_end();
+        if (!EVP_PKEY_CTX_set_params(context, params)) {
+            return_value = T_COSE_ERR_UNSUPPORTED_SIGNING_ALG;
+            goto Done;
+        }
+#endif
         return_value = T_COSE_SUCCESS;
     } else if (t_cose_algorithm_is_rsassa_pss(cose_algorithm_id)) {
         /**
