@@ -9,7 +9,6 @@
  * See BSD-3-Clause license in README.md
  */
 
-
 #ifndef __T_COSE_COMMON_H__
 #define __T_COSE_COMMON_H__
 
@@ -251,20 +250,6 @@ enum t_cose_key_usage_flags {
 };
 
 
-
-/* Private value. Intentionally not documented for Doxygen.
- * This is the size allocated for the encoded protected headers.  It
- * needs to be big enough for make_protected_header() to succeed. It
- * currently sized for one header with an algorithm ID up to 32 bits
- * long -- one byte for the wrapping map, one byte for the label, 5
- * bytes for the ID. If this is made accidentially too small, QCBOR will
- * only return an error, and not overrun any buffers.
- *
- * 9 extra bytes are added, rounding it up to 16 total, in case some
- * other protected header is to be added.
- */
-#define T_COSE_MAC0_MAX_SIZE_PROTECTED_PARAMETERS (1 + 1 + 5 + 9)
-
 /* Six: an alg id, a kid, an iv, a content type, one custom, crit list
  * or: 2 alg IDs, an IV, a kid, a supp_pub_info, one custom. If
  * this is not enough use t_cose_encrypt_add_param_storage() or
@@ -285,6 +270,7 @@ enum t_cose_key_usage_flags {
  * 50-plus lines to figure out the actual value.
  */
 // TODO: renumber grouping unsupported algorithm errors together
+// TODO: review the buffer-too-small errors; are there too many of them?
 enum t_cose_err_t {
     /** Operation completed successfully. */
     T_COSE_SUCCESS = 0,
@@ -328,8 +314,7 @@ enum t_cose_err_t {
      * when a byte string is expected. */
     T_COSE_ERR_PARAMETER_CBOR = 10,
 
-    /** No algorithm ID was found when one is needed. For example,
-     * when verifying a \c COSE_Sign1. */
+    /** No algorithm ID found, algorithm ID encoded wrong, not in protected header  or such. */
     T_COSE_ERR_NO_ALG_ID = 11,
 
     /** No kid (key ID) was found when one is needed. For example,
@@ -490,14 +475,15 @@ enum t_cose_err_t {
      */
     T_COSE_ERR_MAC0_FORMAT = 48,
 
+    // TODO: renumber these properly as part of a big renumbering
     /** The requested content key distribution algorithm is not supported.  */
-    T_COSE_ERR_UNSUPPORTED_CONTENT_KEY_DISTRIBUTION_ALG = 46,
+    T_COSE_ERR_UNSUPPORTED_CONTENT_KEY_DISTRIBUTION_ALG = 146,
 
     /** The requested encryption algorithm is not supported.  */
-    T_COSE_ERR_UNSUPPORTED_ENCRYPTION_ALG = 47,
+    T_COSE_ERR_UNSUPPORTED_ENCRYPTION_ALG = 147,
 
     /** The requested key length is not supported.  */
-    T_COSE_ERR_UNSUPPORTED_KEY_LENGTH = 48,
+    T_COSE_ERR_UNSUPPORTED_KEY_LENGTH = 148,
 
     /** Adding a recipient to the COSE_Encrypt0 structure is not allowed.  */
     T_COSE_ERR_RECIPIENT_CANNOT_BE_ADDED = 49,
@@ -636,7 +622,24 @@ enum t_cose_err_t {
      * to be larger because there are too many protected
      * headers, party u/v identities were added or
      * supp info was added. TODO: see xxxx*/
-    T_COSE_ERR_KDF_CONTEXT_SIZE = 88
+    T_COSE_ERR_KDF_CONTEXT_SIZE = 88,
+
+    /** COSE_Encrypt has the wrong stuff in it */
+    T_COSE_ERR_ENCRYPT_FORMAT = 89,
+  
+    /** Protected headers exists when they are not allowed. This typically occurs when the
+     * crypto algorithm is not AEAD and thus can't protect the headers. */
+    T_COSE_ERR_PROTECTED_NOT_ALLOWED = 90,
+
+    /** While decryption, the padding for AES-CBC is invalid. */
+    T_COSE_ERR_BAD_PADDING = 90,
+
+    /** External AAD is passed as an argument for non AEAD cipher. */
+    T_COSE_ERR_AAD_WITH_NON_AEAD = 91,
+
+    /** An initialization vector (IV) is empty, wrong type or such. */
+    T_COSE_ERR_BAD_IV = 92,
+
 };
 
 
@@ -774,7 +777,7 @@ enum t_cose_err_t {
 
 
 /* Default size allowed for Enc_structure for COSE_Encrypt and COSE_Encrypt0.
- * If there are a lot or header parameters or AAD passed in is large,
+ * If there are a lot or header parameters or the externally supplied data (Section 4.3, RFC 9052) passed in is large,
  * this may not be big enough and error TODO will be returned. Call
  * TODO to give a bigger buffer.*/
 #define T_COSE_ENCRYPT_STRUCT_DEFAULT_SIZE 64
@@ -815,7 +818,7 @@ t_cose_is_algorithm_supported(int32_t cose_algorithm_id);
  * These are the inputs to create a Sig_structure
  * from section 4.4 in RFC 9052.
  *
- * aad and sign_protected may be \ref NULL_Q_USEFUL_BUF_C.
+ * ext_sup_data and sign_protected may be \ref NULL_Q_USEFUL_BUF_C.
  *
  * payload is a CBOR encoded byte string that may
  * contain CBOR or other.
@@ -825,7 +828,7 @@ t_cose_is_algorithm_supported(int32_t cose_algorithm_id);
  */
 struct t_cose_sign_inputs {
     struct q_useful_buf_c  body_protected;
-    struct q_useful_buf_c  aad;
+    struct q_useful_buf_c  ext_sup_data;
     struct q_useful_buf_c  sign_protected;
     struct q_useful_buf_c  payload;
 };
@@ -845,6 +848,7 @@ struct t_cose_sign_inputs {
 struct t_cose_alg_and_bits {
     int32_t   cose_alg_id;
     uint32_t  bits_in_key;
+    uint32_t  bits_iv;
 };
 
 

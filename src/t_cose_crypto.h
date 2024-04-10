@@ -551,11 +551,14 @@ struct t_cose_crypto_hmac {
     #ifdef T_COSE_USE_PSA_CRYPTO
         /* --- The context for PSA Crypto (MBed Crypto) --- */
         psa_mac_operation_t op_ctx;
+        psa_status_t         status;
 
     #elif T_COSE_USE_OPENSSL_CRYPTO
         /* --- The context for OpenSSL crypto --- */
         EVP_MD_CTX  *evp_ctx;
         EVP_PKEY    *evp_pkey;
+        int          update_error; /* Used to track error return by SHAXXX_Update() */
+
 
     #else
         /* --- Default: generic pointer / handle --- */
@@ -714,9 +717,9 @@ t_cose_crypto_hash_finish(struct t_cose_crypto_hash *hash_ctx,
  *         Some general failure of the HMAC function.
  */
 enum t_cose_err_t
-t_cose_crypto_hmac_compute_setup(struct t_cose_crypto_hmac *hmac_ctx,
-                                 struct t_cose_key          signing_key,
-                                 const int32_t              cose_alg_id);
+t_cose_crypto_hmac_setup(struct t_cose_crypto_hmac *hmac_ctx,
+                         struct t_cose_key          signing_key,
+                         const int32_t              cose_alg_id);
 
 /**
  * \brief Add a message fragment to a multipart HMAC operation.
@@ -733,7 +736,7 @@ t_cose_crypto_hmac_compute_setup(struct t_cose_crypto_hmac *hmac_ctx,
  * \retval T_COSE_ERR_FAIL
  *         Some general failure of the HMAC function.
  */
-enum t_cose_err_t
+void
 t_cose_crypto_hmac_update(struct t_cose_crypto_hmac *hmac_ctx,
                           struct q_useful_buf_c      payload);
 
@@ -756,52 +759,9 @@ t_cose_crypto_hmac_update(struct t_cose_crypto_hmac *hmac_ctx,
  *         Some general failure of the HMAC function.
  */
 enum t_cose_err_t
-t_cose_crypto_hmac_compute_finish(struct t_cose_crypto_hmac *hmac_ctx,
-                                  struct q_useful_buf        tag_buf,
-                                  struct q_useful_buf_c     *tag);
-
-/**
- * \brief Set up a multipart HMAC validation operation.
- *
- * \param[in,out] hmac_ctx      Pointer to the HMAC context.
- * \param[in] cose_alg_id       The algorithm used in HMAC.
- * \param[in] validation_key    Key for HMAC validation.
- *
- * \retval T_COSE_SUCCESS
- *         Operation succeeds.
- * \retval T_COSE_ERR_UNSUPPORTED_SIGNING_ALG
- *         The algorithm is unsupported.
- * \retval T_COSE_ERR_INVALID_ARGUMENT
- *         Invalid arguments.
- * \retval T_COSE_ERR_FAIL
- *         Some general failure of the HMAC function.
- */
-enum t_cose_err_t
-t_cose_crypto_hmac_validate_setup(struct t_cose_crypto_hmac *hmac_ctx,
-                                  const  int32_t             cose_alg_id,
-                                  struct t_cose_key          validation_key);
-
-/**
- * \brief Finish the validation of the HMAC of a message.
- *
- * \param[in,out] hmac_ctx      Pointer to the HMAC context.
- * \param[in] tag               Pointer and length of the tag.
- *
- * \retval T_COSE_SUCCESS
- *         Tag calculation succeeds.
- * \retval T_COSE_ERR_INVALID_ARGUMENT
- *         Invalid arguments.
- * \retval T_COSE_ERR_FAIL
- *         Some general failure of the HMAC function.
- * \retval PSA_ERROR_INVALID_SIGNATURE
- *         HMAC validation failed.
- */
-enum t_cose_err_t
-t_cose_crypto_hmac_validate_finish(struct t_cose_crypto_hmac *hmac_ctx,
-                                   struct q_useful_buf_c      tag);
-
-
-
+t_cose_crypto_hmac_finish(struct t_cose_crypto_hmac *hmac_ctx,
+                          struct q_useful_buf        tag_buf,
+                          struct q_useful_buf_c     *tag);
 
 
 // TODO: rename this to have hmac in its name
@@ -1077,6 +1037,55 @@ t_cose_crypto_aead_decrypt(int32_t                cose_algorithm_id,
                            struct q_useful_buf_c *plaintext);
 
 /**
+ * \brief Decrypt a ciphertext using a non AEAD cipher. Part of the
+ * t_cose crypto adaptation layer.
+ *
+ * \param[in] cose_algorithm_id      The algorithm to use for decryption.
+ *                                   The IDs are defined in [COSE (RFC 8152)]
+ *                                   (https://tools.ietf.org/html/rfc8152)
+ *                                    or in the [IANA COSE Registry]
+ *                                   (https://www.iana.org/assignments/cose/cose.xhtml).
+ * \param[in] key                    The decryption key to use.
+ * \param[in] nonce                  The nonce used as input to the decryption operation.
+ * \param[in] ciphertext             The ciphertext to decrypt.
+ * \param[in] plaintext_buffer       Buffer where the plaintext will be put.
+ * \param[out] plaintext  Place to return the plaintext
+ *
+ * The key provided must be a symmetric key of the correct type for
+ * \c cose_algorithm_id.
+ *
+ * A key handle is used even though it could be a buffer with a key in
+ * order to allow use of keys internal to the crypto library, crypto
+ * HW and such. See t_cose_crypto_make_symmetric_key_handle().
+ *
+ * This does not need to support a size calculation mode as is
+ * required of t_cose_crypto_non_aead_encrypt().
+ *
+ * One of the following errors should be returned. Other errors should
+ * not be returned.
+ *
+ * \retval T_COSE_SUCCESS
+ *         The decryption operation was successful.
+ * \retval T_COSE_ERR_UNSUPPORTED_CIPHER_ALG
+ *         An unsupported cipher algorithm was provided.
+ * \retval T_COSE_ERR_TOO_SMALL
+ *         The \c plaintext_buffer is too small.
+ * \retval T_COSE_ERR_WRONG_TYPE_OF_KEY
+ *         The key is not right for the algorithm or is not allowed for decryption.
+ * \retval T_COSE_ERR_DECRYPT_FAIL
+ *         Decryption failed for a reason other than above.
+ * \retval T_COSE_ERR_BAD_PADDING
+ *         The padding does not match defined in RFC9459.
+ */
+enum t_cose_err_t
+t_cose_crypto_non_aead_decrypt(int32_t                cose_algorithm_id,
+                               struct t_cose_key      key,
+                               struct q_useful_buf_c  nonce,
+                               struct q_useful_buf_c  ciphertext,
+                               struct q_useful_buf    plaintext_buffer,
+                               struct q_useful_buf_c *plaintext);
+
+/**
  * \brief Encrypt plaintext using an AEAD cipher. Part of the
  * t_cose crypto adaptation layer.
  *
@@ -1125,6 +1134,55 @@ t_cose_crypto_aead_encrypt(int32_t                cose_algorithm_id,
                            struct q_useful_buf_c  plaintext,
                            struct q_useful_buf    ciphertext_buffer,
                            struct q_useful_buf_c *ciphertext);
+
+
+/**
+ * \brief Encrypt plaintext using a non AEAD cipher.
+ * Part of the t_cose crypto adaptation layer.
+ *
+ * \param[in] cose_algorithm_id      The algorithm to use for encryption.
+ *                                   The IDs are defined in [COSE (RFC 8152)]
+ *                                   (https://tools.ietf.org/html/rfc8152)
+ *                                    or in the [IANA COSE Registry]
+ *                                   (https://www.iana.org/assignments/cose/cose.xhtml).
+ * \param[in] key                    The encryption key to use.
+ * \param[in] nonce                  The nonce used as input to the encryption operation.
+ * \param[in] plaintext              The plaintext to encrypt.
+ * \param[in] ciphertext_buffer      Buffer where the ciphertext will be put.
+ * \param[out] ciphertext  Place to put pointer and length to ciphertext.
+ *
+ * The key provided must be a symmetric key of the correct type for
+ * \c cose_algorithm_id.
+ *
+ * A key handle is used even though it could be a buffer with a key in
+ * order to allow use of keys internal to the crypto library, crypto
+ * HW and such. See t_cose_crypto_make_symmetric_key_handle().
+ *
+ * This must support a size calculation mode which is indicated by
+ * ciphertext_buffer.ptr == NULL and which fills the size in
+ * ciphertext->len.
+ *
+ * One of the following errors should be returned. Other errors should
+ * not be returned.
+ *
+ * \retval T_COSE_SUCCESS
+ *         The decryption operation was successful.
+ * \retval T_COSE_ERR_UNSUPPORTED_CIPHER_ALG
+ *         An unsupported cipher algorithm was provided.
+ * \retval T_COSE_ERR_TOO_SMALL
+ *         \c ciphertext_buffer is too small.
+ * \retval T_COSE_ERR_WRONG_TYPE_OF_KEY
+ *         The key is not right for the algorithm or is not allowed for encryption.
+ * \retval T_COSE_ERR_ENCRYPT_FAIL
+ *         Encryption failed for a reason other than above.
+ */
+enum t_cose_err_t
+t_cose_crypto_non_aead_encrypt(int32_t                cose_algorithm_id,
+                               struct t_cose_key      key,
+                               struct q_useful_buf_c  nonce,
+                               struct q_useful_buf_c  plaintext,
+                               struct q_useful_buf    ciphertext_buffer,
+                               struct q_useful_buf_c *ciphertext);
 
 
 /* Free a symmetric key. */

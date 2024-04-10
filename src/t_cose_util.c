@@ -226,7 +226,45 @@ bits_in_crypto_alg(int32_t cose_algorithm_id)
     switch(cose_algorithm_id) {
         case T_COSE_ALGORITHM_AES128CCM_16_128:
         case T_COSE_ALGORITHM_A128KW:
-        case T_COSE_ALGORITHM_A128GCM: return 128;
+        case T_COSE_ALGORITHM_A128GCM:
+        case T_COSE_ALGORITHM_A128CTR:
+        case T_COSE_ALGORITHM_A128CBC: return 128;
+        case T_COSE_ALGORITHM_A192KW:
+        case T_COSE_ALGORITHM_A192GCM:
+        case T_COSE_ALGORITHM_A192CTR:
+        case T_COSE_ALGORITHM_A192CBC: return 192;
+        case T_COSE_ALGORITHM_AES256CCM_16_128:
+        case T_COSE_ALGORITHM_A256KW:
+        case T_COSE_ALGORITHM_A256GCM:
+        case T_COSE_ALGORITHM_A256CTR:
+        case T_COSE_ALGORITHM_A256CBC: return 256;
+        default: return UINT32_MAX;
+    }
+}
+
+
+
+/**
+ * \brief Returns the IV length (in bits) of a given encryption algo.
+ *
+ * @param cose_algorithm_id  Crypto algorithm.
+ *
+ * Returns the IV length (in bits) or UINT_MAX in case of an
+ * unknown algorithm id.
+ */
+uint32_t
+bits_iv_alg(int32_t cose_algorithm_id)
+{
+    switch(cose_algorithm_id) {
+        case T_COSE_ALGORITHM_AES128CCM_16_128:
+        case T_COSE_ALGORITHM_A128KW:
+        case T_COSE_ALGORITHM_A128GCM:
+        case T_COSE_ALGORITHM_A128CTR:
+        case T_COSE_ALGORITHM_A128CBC:
+        case T_COSE_ALGORITHM_A192CTR:
+        case T_COSE_ALGORITHM_A192CBC:
+        case T_COSE_ALGORITHM_A256CTR:
+        case T_COSE_ALGORITHM_A256CBC: return 128;
         case T_COSE_ALGORITHM_A192KW:
         case T_COSE_ALGORITHM_A192GCM: return 192;
         case T_COSE_ALGORITHM_AES256CCM_16_128:
@@ -238,45 +276,80 @@ bits_in_crypto_alg(int32_t cose_algorithm_id)
 
 
 
-
-// TODO: try to combine with create_tbs_hash so that no buffer for headers
-// is needed. Make sure it doesn't make sign-only or mac-only object code big
-enum t_cose_err_t
-create_tbm(const struct t_cose_sign_inputs *mac_inputs,
-           struct q_useful_buf              tbm_first_part_buf,
-           struct q_useful_buf_c           *tbm_first_part)
+/**
+ * \brief HMAC an encoded bstr without actually encoding it in memory.
+ *
+ * @param hmac_ctx  HMAC context.
+ * @param bstr      Bytes of the bstr.
+ *
+ * If \c bstr is \c NULL_Q_USEFUL_BUF_C, a zero-length bstr will be
+ * HMAC'd into the output.
+ */
+static void
+hmac_bstr(struct t_cose_crypto_hmac *hmac_ctx,
+          struct q_useful_buf_c      bstr)
 {
-    QCBOREncodeContext cbor_encode_ctx;
-    QCBORError         qcbor_result;
+    Q_USEFUL_BUF_MAKE_STACK_UB (buffer_for_encoded_head, QCBOR_HEAD_BUFFER_SIZE);
+    struct q_useful_buf_c       encoded_head;
 
-    /* This builds the CBOR-format to-be-maced bytes */
-    QCBOREncode_Init(&cbor_encode_ctx, tbm_first_part_buf);
-    QCBOREncode_OpenArray(&cbor_encode_ctx);
-    /* context */
-    QCBOREncode_AddText(&cbor_encode_ctx, Q_USEFUL_BUF_FROM_SZ_LITERAL(COSE_MAC_CONTEXT_STRING_MAC0));
+    encoded_head = QCBOREncode_EncodeHead(buffer_for_encoded_head,
+                                          CBOR_MAJOR_TYPE_BYTE_STRING,
+                                          0,
+                                          bstr.len);
 
-    /* body_protected */
-    QCBOREncode_AddBytes(&cbor_encode_ctx, mac_inputs->body_protected);
+    /* An encoded bstr is the CBOR head with its length followed by the bytes */
+    t_cose_crypto_hmac_update(hmac_ctx, encoded_head);
+    t_cose_crypto_hmac_update(hmac_ctx, bstr);
+}
 
-    /* external_aad. There is none so an empty bstr */
-    QCBOREncode_AddBytes(&cbor_encode_ctx, NULL_Q_USEFUL_BUF_C);
+/* Tried combing the above with hash_bstr. It accepted a function
+ * pointer for the hash/hmac function. The object code with this was
+ * slightly smaller with GCC and substantially larger with
+ * clang/llvm. It was cool, but using the two functions for simplicity
+ * and substantially smaller clang/llvm code size.
+ */
 
-    /* The short fake payload, add only the byte string type and length */
-    QCBOREncode_AddBytesLenOnly(&cbor_encode_ctx, mac_inputs->payload);
 
-    /* Close of the array */
-    QCBOREncode_CloseArray(&cbor_encode_ctx);
+/*
+ * Public function. See t_cose_util.h
+ */
+enum t_cose_err_t
+create_tbm(const int32_t                    cose_alg_id,
+           struct t_cose_key                mac_key,
+           bool                             is_mac0,
+           const struct t_cose_sign_inputs *mac_inputs,
+           const struct q_useful_buf        tag_buf,
+           struct q_useful_buf_c           *mac_tag)
+{
+    enum t_cose_err_t          return_value;
+    struct t_cose_crypto_hmac  hmac_ctx;
+    struct q_useful_buf_c      first_part;
 
-    /* get the encoded results, except for payload */
-    qcbor_result = QCBOREncode_Finish(&cbor_encode_ctx, tbm_first_part);
-    if(qcbor_result) {
-        /* Mainly means that the protected_headers were too big
-         * (which should never happen)
-         */
-        return T_COSE_ERR_SIG_STRUCT;
+    return_value = t_cose_crypto_hmac_setup(&hmac_ctx,
+                                             mac_key,
+                                             cose_alg_id);
+    if(return_value) {
+        return return_value;
     }
 
-    return T_COSE_SUCCESS;
+    /* Same approach as hash_bstr(). See comments in hash_bstr() */
+
+    if(is_mac0) {
+        /* 0x84 is array of 4, 0x64 is length of a 4 text string in CBOR */
+        first_part = Q_USEFUL_BUF_FROM_SZ_LITERAL("\x84\x64" COSE_MAC_CONTEXT_STRING_MAC0);
+    } else {
+        /* 0x84 is array of 4, 0x63 is length of a 3 text string in CBOR */
+        first_part = Q_USEFUL_BUF_FROM_SZ_LITERAL("\x84\x63" COSE_MAC_CONTEXT_STRING_MAC);
+    }
+    t_cose_crypto_hmac_update(&hmac_ctx, first_part);
+
+    hmac_bstr(&hmac_ctx, mac_inputs->body_protected);
+    hmac_bstr(&hmac_ctx, mac_inputs->ext_sup_data);
+    hmac_bstr(&hmac_ctx, mac_inputs->payload);
+
+    return_value = t_cose_crypto_hmac_finish(&hmac_ctx, tag_buf, mac_tag);
+
+    return return_value;
 }
 
 
@@ -304,7 +377,7 @@ create_tbs(const struct t_cose_sign_inputs *sign_inputs,
     if(!q_useful_buf_c_is_empty(sign_inputs->sign_protected)) {
         QCBOREncode_AddBytes(&cbor_context, sign_inputs->sign_protected);
     }
-    QCBOREncode_AddBytes(&cbor_context, sign_inputs->aad);
+    QCBOREncode_AddBytes(&cbor_context, sign_inputs->ext_sup_data);
     QCBOREncode_AddBytes(&cbor_context, sign_inputs->payload);
     QCBOREncode_CloseArray(&cbor_context);
 
@@ -440,7 +513,7 @@ create_tbs_hash(const int32_t                    cose_algorithm_id,
     }
 
     /* external_aad */
-    hash_bstr(&hash_ctx, sign_inputs->aad);
+    hash_bstr(&hash_ctx, sign_inputs->ext_sup_data);
 
     /* payload */
     hash_bstr(&hash_ctx, sign_inputs->payload);
@@ -458,7 +531,7 @@ Done:
 enum t_cose_err_t
 create_enc_structure(const char            *context_string,
                      struct q_useful_buf_c  protected_headers,
-                     struct q_useful_buf_c  aad,
+                     struct q_useful_buf_c  extern_aad,
                      struct q_useful_buf    buffer_for_enc,
                      struct q_useful_buf_c *enc_structure)
 {
@@ -480,7 +553,7 @@ create_enc_structure(const char            *context_string,
     QCBOREncode_OpenArray(&cbor_encoder);
     QCBOREncode_AddSZString(&cbor_encoder, context_string);
     QCBOREncode_AddBytes(&cbor_encoder, protected_headers);
-    QCBOREncode_AddBytes(&cbor_encoder, aad);
+    QCBOREncode_AddBytes(&cbor_encoder, extern_aad);
     QCBOREncode_CloseArray(&cbor_encoder);
     err = QCBOREncode_Finish(&cbor_encoder, enc_structure);
     if(err) {
@@ -695,5 +768,22 @@ t_cose_link_rs(struct t_cose_rs_obj **list, struct t_cose_rs_obj *new_rs)
         struct t_cose_rs_obj *t;
         for(t = *list; t->next != NULL; t = t->next);
         t->next = new_rs;
+    }
+}
+
+/* This returns true if the algorithm id is non AEAD defined in RFC9459 */
+bool
+t_cose_alg_is_non_aead(int32_t cose_algorithm_id)
+{
+    switch(cose_algorithm_id) {
+    case T_COSE_ALGORITHM_A128CTR:
+    case T_COSE_ALGORITHM_A192CTR:
+    case T_COSE_ALGORITHM_A256CTR:
+    case T_COSE_ALGORITHM_A128CBC:
+    case T_COSE_ALGORITHM_A192CBC:
+    case T_COSE_ALGORITHM_A256CBC:
+        return true;
+    default:
+        return false;
     }
 }

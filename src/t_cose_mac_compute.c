@@ -81,21 +81,15 @@ t_cose_mac_encode_parameters(struct t_cose_mac_calculate_ctx *me,
  */
 enum t_cose_err_t
 t_cose_mac_encode_tag(struct t_cose_mac_calculate_ctx *me,
+                      struct q_useful_buf_c            ext_sup_data,
                       struct q_useful_buf_c            payload,
                       QCBOREncodeContext              *cbor_encode_ctx)
 {
     enum t_cose_err_t            return_value;
     QCBORError                   cbor_err;
-    /* Pointer and length of the completed tag */
-    struct q_useful_buf_c        tag;
-    /* Buffer for the actual tag */
-    Q_USEFUL_BUF_MAKE_STACK_UB(  tag_buf,
+    struct q_useful_buf_c        computed_mac_tag;
+    Q_USEFUL_BUF_MAKE_STACK_UB(  mac_tag_buf,
                                  T_COSE_CRYPTO_HMAC_TAG_MAX_SIZE);
-    struct q_useful_buf_c        tbm_first_part;
-    /* Buffer for the ToBeMaced */
-    Q_USEFUL_BUF_MAKE_STACK_UB(  tbm_first_part_buf,
-                                 T_COSE_SIZE_OF_TBM);
-    struct t_cose_crypto_hmac    hmac_ctx;
     struct t_cose_sign_inputs    mac_input;
 
     /*
@@ -115,9 +109,8 @@ t_cose_mac_encode_tag(struct t_cose_mac_calculate_ctx *me,
 
     if(QCBOREncode_IsBufferNULL(cbor_encode_ctx)) {
         /* Just calculating sizes. All that is needed is the tag size. */
-        tag.ptr = NULL;
-        tag.len = t_cose_tag_size(me->cose_algorithm_id);
-
+        computed_mac_tag.ptr = NULL;
+        computed_mac_tag.len = t_cose_tag_size(me->cose_algorithm_id);
         return_value = T_COSE_SUCCESS;
         goto CloseArray;
     }
@@ -127,54 +120,24 @@ t_cose_mac_encode_tag(struct t_cose_mac_calculate_ctx *me,
      * MAC are the protected parameters, the payload that is
      * getting MACed.
      */
-    mac_input.aad = NULL_Q_USEFUL_BUF_C; // TODO: this won't be NULL when AAD is supported
-    mac_input.payload = payload;
+    mac_input.ext_sup_data   = ext_sup_data;
+    mac_input.payload        = payload;
     mac_input.body_protected = me->protected_parameters;
     mac_input.sign_protected = NULL_Q_USEFUL_BUF_C; /* Never sign-protected for MAC */
-    return_value = create_tbm(&mac_input,
-                              tbm_first_part_buf,
-                              &tbm_first_part);
-    if(return_value) {
-        goto Done;
-    }
 
-    /*
-     * Start the HMAC.
-     * Calculate the tag of the first part of ToBeMaced and the wrapped
-     * payload, to save a bigger buffer containing the entire ToBeMaced.
-     */
-    return_value = t_cose_crypto_hmac_compute_setup(&hmac_ctx,
-                                                    me->mac_key,
-                                                    me->cose_algorithm_id);
-    if(return_value) {
-        goto Done;
-    }
-
-    /* Compute the tag of the first part. */
-    return_value = t_cose_crypto_hmac_update(&hmac_ctx,
-                                             q_useful_buf_head(tbm_first_part,
-                                                           tbm_first_part.len));
-    if(return_value) {
-        goto Done;
-    }
-
-    /*
-     * It is assumed that the context payload has been wrapped in a byte
-     * string in CBOR format.
-     */
-    return_value = t_cose_crypto_hmac_update(&hmac_ctx, payload);
-    if(return_value) {
-        goto Done;
-    }
-
-    return_value = t_cose_crypto_hmac_compute_finish(&hmac_ctx, tag_buf, &tag);
+    return_value = create_tbm(me->cose_algorithm_id, /* in: algorithm ID*/
+                              me->mac_key, /* in: key */
+                              true,        /* in: is_mac0 (MAC vs MAC0) */
+                             &mac_input,   /* in: struct of all TBM inputs */
+                              mac_tag_buf, /* in: buffer to output to */
+                             &computed_mac_tag); /* out: the computed MAC tag */
     if(return_value) {
         goto Done;
     }
 
 CloseArray:
     /* Add tag to CBOR and close out the array */
-    QCBOREncode_AddBytes(cbor_encode_ctx, tag);
+    QCBOREncode_AddBytes(cbor_encode_ctx, computed_mac_tag);
     QCBOREncode_CloseArray(cbor_encode_ctx);
 
     /* CBOR encoding errors are tracked in the CBOR encoding context
@@ -191,12 +154,11 @@ Done:
 enum t_cose_err_t
 t_cose_mac_compute_private(struct t_cose_mac_calculate_ctx *me,
                            bool                             payload_is_detached,
-                           struct q_useful_buf_c            aad,
+                           struct q_useful_buf_c            ext_sup_data,
                            struct q_useful_buf_c            payload,
                            struct q_useful_buf              out_buf,
                            struct q_useful_buf_c           *result)
 {
-    (void)aad;
     QCBOREncodeContext  encode_ctx;
     enum t_cose_err_t   return_value;
 
@@ -217,7 +179,7 @@ t_cose_mac_compute_private(struct t_cose_mac_calculate_ctx *me,
         QCBOREncode_AddBytes(&encode_ctx, payload);
     }
 
-    return_value = t_cose_mac_encode_tag(me, payload, &encode_ctx);
+    return_value = t_cose_mac_encode_tag(me, ext_sup_data, payload, &encode_ctx);
     if(return_value) {
         goto Done;
     }

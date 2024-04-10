@@ -447,6 +447,65 @@
  */
 #define T_COSE_ALGORITHM_NONE 0
 
+/**
+ * \def COSE_ALGORITHM_A128CTR
+ *
+ * \brief AES-CTR mode w/ 128-bit key
+ *
+ * As this algorithm is non-AEAD cipher, DO NOT use this
+ * unless integrity and authentication is provided by another mechanism.
+ */
+#define T_COSE_ALGORITHM_A128CTR -65534
+
+/**
+ * \def COSE_ALGORITHM_A192CTR
+ *
+ * \brief AES-CTR mode w/ 192-bit key
+ *
+ * As this algorithm is non-AEAD cipher, DO NOT use this
+ * unless integrity and authentication is provided by another mechanism.
+ */
+#define T_COSE_ALGORITHM_A192CTR -65533
+
+/**
+ * \def COSE_ALGORITHM_A256CTR
+ *
+ * \brief AES-CTR mode w/ 256-bit key
+ *
+ * As this algorithm is non-AEAD cipher, DO NOT use this
+ * unless integrity and authentication is provided by another mechanism.
+ */
+#define T_COSE_ALGORITHM_A256CTR -65532
+
+/**
+ * \def COSE_ALGORITHM_A128CBC
+ *
+ * \brief AES-CBC mode w/ 128-bit key
+ *
+ * As this algorithm is non-AEAD cipher, DO NOT use this
+ * unless integrity and authentication is provided by another mechanism.
+ */
+#define T_COSE_ALGORITHM_A128CBC -65531
+
+/**
+ * \def COSE_ALGORITHM_A192CBC
+ *
+ * \brief AES-CBC mode w/ 192-bit key
+ *
+ * As this algorithm is non-AEAD cipher, DO NOT use this
+ * unless integrity and authentication is provided by another mechanism.
+ */
+#define T_COSE_ALGORITHM_A192CBC -65530
+
+/**
+ * \def COSE_ALGORITHM_A256CBC
+ *
+ * \brief AES-CBC mode w/ 256-bit key
+ *
+ * As this algorithm is non-AEAD cipher, DO NOT use this
+ * unless integrity and authentication is provided by another mechanism.
+ */
+#define T_COSE_ALGORITHM_A256CBC -65529
 
 
 
@@ -682,5 +741,7 @@
  * structures. See RFC 8152, section 6.3.
  */
 #define COSE_MAC_CONTEXT_STRING_MAC0 "MAC0"
+
+#define COSE_MAC_CONTEXT_STRING_MAC "MAC"
 
 #endif /* __T_COSE_STANDARD_CONSTANTS_H__ */
