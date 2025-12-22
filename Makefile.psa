@@ -33,8 +33,8 @@
 # This is for reference to QCBOR that is installed in /usr/local or in
 # some system location. This will typically use dynamic linking if
 # there is a libqcbor.so
-QCBOR_INC=-I /usr/local/include
-QCBOR_LIB=-lqcbor -lm
+QCBOR_INC?=-I /usr/local/include
+QCBOR_LIB?=-lqcbor -lm
 
 
 # ---- crypto configuration -----
@@ -47,8 +47,8 @@ QCBOR_LIB=-lqcbor -lm
 
 # These two are for reference to Mbed TLS that has been installed in
 # /usr/local or in some system location.
-CRYPTO_LIB=-l mbedcrypto
-CRYPTO_INC=-I /usr/local/include
+CRYPTO_LIB?=-l mbedcrypto
+CRYPTO_INC?=-I /usr/local/include
 
 CRYPTO_CONFIG_OPTS=-DT_COSE_USE_PSA_CRYPTO
 CRYPTO_OBJ=crypto_adapters/t_cose_psa_crypto.o
