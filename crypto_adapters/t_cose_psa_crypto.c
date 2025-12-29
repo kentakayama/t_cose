@@ -1577,7 +1577,7 @@ t_cose_crypto_ecdh(struct t_cose_key      private_key,
 
 
 
-
+#ifndef T_COSE_DISABLE_ESDH
 /*
  * See documentation in t_cose_crypto.h
  */
@@ -1623,7 +1623,7 @@ t_cose_crypto_hkdf(const int32_t               cose_hash_algorithm_id,
 
     return T_COSE_SUCCESS;
 }
-
+#endif /* T_COSE_DISABLE_ESDH */
 
 
 
